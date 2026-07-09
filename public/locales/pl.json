@@ -9,6 +9,7 @@
     "diaries": "Dzienniki",
     "prompts": "Prompty",
     "letters": "Listy",
+    "battleReport": "Raporty bitewne",
     "settings": "Ustawienia",
     "system": "System",
     "help": "Pomoc",
@@ -90,6 +91,8 @@
     "diary_for_letter_tooltip": "Ten prompt służy do generowania wpisu do dziennika na podstawie wysłanego lub otrzymanego listu.",
     "suggestion_prompt": "Prompt sugestii",
     "suggestion_prompt_tooltip": "Ten prompt służy do generowania sugestii odpowiedzi dla gracza.",
+    "battleReportPrompt": "Prompt raportu bitewnego",
+    "battleReportPrompt.tooltip": "Instrukcje dla LLM podczas generowania raportów bitewnych. Prompt jest dodawany po faktach bitwy i kontekście postaci.",
     "restore_defaults": "Przywróć domyślne prompty",
     "restore_tooltip": "Kliknij ten przycisk, aby przywrócić wszystkie prompty do ich wartości domyślnych",
     "presets_header": "Presety promptów",
@@ -125,6 +128,16 @@
     "total_tokens_header": "Całkowita liczba tokenów",
     "total_conversation_tokens": "Całkowita liczba tokenów konwersacji:",
     "total_letter_tokens": "Całkowita liczba tokenów listu:"
+  },
+  "battleReport": {
+    "refresh": "Odśwież",
+    "slot": "Slot",
+    "status": "Status",
+    "status_pending": "Oczekuje",
+    "status_fallback_written": "Zastępczy zapisany",
+    "status_llm_completed": "Wygenerowany",
+    "status_error": "Błąd",
+    "no_reports": "Brak raportów bitewnych"
   },
   "settings": {
     "header": "Ustawienia",

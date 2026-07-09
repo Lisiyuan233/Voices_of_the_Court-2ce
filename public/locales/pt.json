@@ -9,6 +9,7 @@
     "diaries": "Diários",
     "prompts": "Prompts",
     "letters": "Cartas",
+    "battleReport": "Relatórios de batalha",
     "settings": "Configurações",
     "system": "Sistema",
     "help": "Ajuda",
@@ -94,6 +95,8 @@
     "diary_for_letter_tooltip": "Este prompt é usado para gerar uma entrada de diário com base em uma carta enviada ou recebida.",
     "suggestion_prompt": "Prompt de Sugestão",
     "suggestion_prompt_tooltip": "Este prompt é usado para gerar sugestões de resposta para o jogador.",
+    "battleReportPrompt": "Prompt de relatório de batalha",
+    "battleReportPrompt.tooltip": "Instruções para o LLM ao gerar relatórios de batalha. O prompt é adicionado após os fatos da batalha e o contexto dos personagens.",
     "restore_defaults": "Restaurar prompts padrão",
     "restore_tooltip": "Clique neste botão para restaurar todos os prompts para seus valores padrão",
     "presets_header": "Predefinições de prompts",
@@ -129,6 +132,16 @@
     "total_tokens_header": "Total de Tokens",
     "total_conversation_tokens": "Total de Tokens de Conversa:",
     "total_letter_tokens": "Total de Tokens de Carta:"
+  },
+  "battleReport": {
+    "refresh": "Atualizar",
+    "slot": "Slot",
+    "status": "Status",
+    "status_pending": "Pendente",
+    "status_fallback_written": "Alternativo escrito",
+    "status_llm_completed": "Gerado",
+    "status_error": "Erro",
+    "no_reports": "Sem relatórios de batalha"
   },
   "settings": {
     "header": "Configurações",

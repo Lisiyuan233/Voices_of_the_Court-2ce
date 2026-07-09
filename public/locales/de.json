@@ -9,6 +9,7 @@
     "diaries": "Tagebücher",
     "prompts": "Prompts",
     "letters": "Briefe",
+    "battleReport": "Schlachtberichte",
     "settings": "Einstellungen",
     "system": "System",
     "help": "Hilfe",
@@ -94,6 +95,8 @@
     "diary_for_letter_tooltip": "Dieser Prompt wird verwendet, um einen Tagebucheintrag basierend auf einem gesendeten oder empfangenen Brief zu erstellen.",
     "suggestion_prompt": "Vorschlags-Prompt",
     "suggestion_prompt_tooltip": "Dieser Prompt wird verwendet, um Antwortvorschläge für den Spieler zu generieren.",
+    "battleReportPrompt": "Schlachtbericht-Prompt",
+    "battleReportPrompt.tooltip": "Anweisungen für das LLM bei der Erstellung von Schlachtberichten. Der Prompt wird nach den Schlachtfakten und dem Charakterkontext hinzugefügt.",
     "restore_defaults": "Standard-Prompts wiederherstellen",
     "restore_tooltip": "Klicken Sie auf diese Schaltfläche, um alle Prompts auf ihre Standardwerte zurückzusetzen",
     "presets_header": "Prompt-Voreinstellungen",
@@ -129,6 +132,16 @@
     "total_tokens_header": "Gesamte Token",
     "total_conversation_tokens": "Gesamte Konversationstoken:",
     "total_letter_tokens": "Gesamte Brief-Token:"
+  },
+  "battleReport": {
+    "refresh": "Aktualisieren",
+    "slot": "Slot",
+    "status": "Status",
+    "status_pending": "Ausstehend",
+    "status_fallback_written": "Ersatz geschrieben",
+    "status_llm_completed": "Generiert",
+    "status_error": "Fehler",
+    "no_reports": "Keine Schlachtberichte"
   },
   "settings": {
     "header": "Einstellungen",

@@ -9,6 +9,7 @@
     "diaries": "Journaux",
     "prompts": "Prompts",
     "letters": "Lettres",
+    "battleReport": "Rapports de bataille",
     "settings": "Paramètres",
     "system": "Système",
     "help": "Aide",
@@ -94,6 +95,8 @@
     "diary_for_letter_tooltip": "Ce prompt est utilisé pour générer une entrée de journal basée sur une lettre envoyée ou reçue.",
     "suggestion_prompt": "Prompt de Suggestion",
     "suggestion_prompt_tooltip": "Ce prompt est utilisé pour générer des suggestions de réponse pour le joueur.",
+    "battleReportPrompt": "Prompt de rapport de bataille",
+    "battleReportPrompt.tooltip": "Instructions pour le LLM lors de la génération des rapports de bataille. Le prompt est ajouté après les faits de la bataille et le contexte des personnages.",
     "restore_defaults": "Restaurer les prompts par défaut",
     "restore_tooltip": "Cliquez sur ce bouton pour restaurer tous les prompts à leurs valeurs par défaut",
     "presets_header": "Préréglages de prompts",
@@ -129,6 +132,16 @@
     "total_tokens_header": "Total des jetons",
     "total_conversation_tokens": "Total des jetons de conversation :",
     "total_letter_tokens": "Total des jetons de lettre :"
+  },
+  "battleReport": {
+    "refresh": "Actualiser",
+    "slot": "Emplacement",
+    "status": "Statut",
+    "status_pending": "En attente",
+    "status_fallback_written": "Secours écrit",
+    "status_llm_completed": "Généré",
+    "status_error": "Erreur",
+    "no_reports": "Aucun rapport de bataille"
   },
   "settings": {
     "header": "Paramètres",

@@ -9,6 +9,7 @@
     "diaries": "Дневники",
     "prompts": "Промпты",
     "letters": "Письма",
+    "battleReport": "Боевые отчеты",
     "settings": "Настройки",
     "system": "Система",
     "help": "Помощь",
@@ -94,6 +95,8 @@
     "diary_for_letter_tooltip": "Этот промпт используется для создания записи в дневнике на основе отправленного или полученного письма.",
     "suggestion_prompt": "Промпт для предложений",
     "suggestion_prompt_tooltip": "Этот промпт используется для генерации предложений ответов для игрока.",
+    "battleReportPrompt": "Промпт боевого отчета",
+    "battleReportPrompt.tooltip": "Инструкции для LLM при генерации боевых отчетов. Промпт добавляется после фактов сражения и контекста персонажей.",
     "restore_defaults": "Восстановить промпты по умолчанию",
     "restore_tooltip": "Нажмите эту кнопку, чтобы восстановить все промпты до их значений по умолчанию",
     "presets_header": "Пресеты промптов",
@@ -129,6 +132,16 @@
     "total_tokens_header": "Всего токенов",
     "total_conversation_tokens": "Всего токенов разговора:",
     "total_letter_tokens": "Всего токенов письма:"
+  },
+  "battleReport": {
+    "refresh": "Обновить",
+    "slot": "Слот",
+    "status": "Статус",
+    "status_pending": "Ожидание",
+    "status_fallback_written": "Запасной записан",
+    "status_llm_completed": "Сгенерирован",
+    "status_error": "Ошибка",
+    "no_reports": "Нет боевых отчетов"
   },
   "settings": {
     "header": "Настройки",

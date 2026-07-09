@@ -97,7 +97,7 @@ const promptKeys = [
     "memoriesPrompt", "suffixPrompt", "narrativePrompt", "sceneDescriptionPrompt",
     "actionPrompt", "actionTriggeredPrompt",
     "letterPrompt", "letterSummaryPrompt", "diaryPrompt", "diarySummarizePrompt", "diaryForLetterPrompt",
-    "suggestionPrompt"
+    "suggestionPrompt", "battleReportPrompt"
 ];
 
 let promptTextareas: { [key: string]: any } = {};

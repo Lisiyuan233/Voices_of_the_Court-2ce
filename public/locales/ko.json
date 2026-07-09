@@ -9,6 +9,7 @@
     "diaries": "일기",
     "prompts": "프롬프트",
     "letters": "편지",
+    "battleReport": "전투 보고",
     "settings": "설정",
     "system": "시스템",
     "help": "도움말",
@@ -90,6 +91,8 @@
     "diary_for_letter_tooltip": "이 프롬프트는 보내거나 받은 편지를 기반으로 일기 항목을 생성하는 데 사용됩니다.",
     "suggestion_prompt": "제안 프롬프트",
     "suggestion_prompt_tooltip": "이 프롬프트는 플레이어의 응답 제안을 생성하는 데 사용됩니다.",
+    "battleReportPrompt": "전투 보고 프롬프트",
+    "battleReportPrompt.tooltip": "전투 보고를 생성할 때 LLM에 대한 지시사항. 프롬프트는 전투 사실과 캐릭터 맥락 뒤에 추가됩니다.",
     "restore_defaults": "기본 프롬프트 복원",
     "restore_tooltip": "모든 프롬프트를 기본값으로 복원하려면 이 버튼을 클릭하세요.",
     "presets_header": "프롬프트 프리셋",
@@ -125,6 +128,16 @@
     "total_tokens_header": "총 토큰",
     "total_conversation_tokens": "총 대화 토큰:",
     "total_letter_tokens": "총 편지 토큰:"
+  },
+  "battleReport": {
+    "refresh": "새로고침",
+    "slot": "슬롯",
+    "status": "상태",
+    "status_pending": "대기 중",
+    "status_fallback_written": "대체 작성됨",
+    "status_llm_completed": "생성됨",
+    "status_error": "오류",
+    "no_reports": "전투 보고 없음"
   },
   "settings": {
     "header": "설정",

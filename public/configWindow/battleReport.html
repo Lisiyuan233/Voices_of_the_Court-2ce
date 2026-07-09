@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title data-i18n="app.title">Voices of the Court 2.0 - Community Edition</title>
+    <link rel="stylesheet" href="config.css" />
+    <link rel="stylesheet" href="../chatWindow/theme.css" />
+</head>
+<body>
+<div class="navbar">
+    <ul>
+        <li><a href="connection.html" data-i18n="nav.connection">Connection</a></li>
+        <li><a href="actions.html" data-i18n="nav.actions">Actions</a></li>
+        <li><a href="summarization.html" data-i18n="nav.summarization">Summarization</a></li>
+        <li><a href="prompts.html" data-i18n="nav.prompts">Prompts</a></li>
+        <li><a href="letters.html" data-i18n="nav.letters">Letters</a></li>
+        <li><a href="diaries.html" data-i18n="nav.diaries">Diaries</a></li>
+        <li class="active"><a href="battleReport.html" data-i18n="nav.battleReport">Battle Reports</a></li>
+        <li><a href="settings.html" data-i18n="nav.settings">Settings</a></li>
+        <li><a href="system.html" data-i18n="nav.system">System</a></li>
+        <li class="help-menu"><a href="#" id="open-readme" data-i18n="nav.help">Help</a></li>
+        <language-selector></language-selector>
+    </ul>
+</div>
+
+<div class="container" id="container" style="display: none; flex-direction: column; height: 100vh; box-sizing: border-box;">
+    <div id="battle-report-controls">
+        <div class="control-group">
+            <button id="battle-report-refresh-btn" class="btn" data-i18n="battleReport.refresh">Refresh</button>
+        </div>
+    </div>
+    <div id="battle-report-list-container" style="flex: 1; overflow-y: auto;">
+        <div id="battle-report-list">
+            <p data-i18n="battleReport.no_reports">No battle reports</p>
+        </div>
+    </div>
+</div>
+
+<script>require("../../dist/shared/LocalizationManager.js")</script>
+<script>
+  const { LocalizationManager } = require("../../dist/shared/LocalizationManager.js");
+  window.LocalizationManager = LocalizationManager;
+</script>
+<script>require("../../dist/configWindow/components/LanguageSelector.js")</script>
+<script>require("../../dist/configWindow/battleReportRenderer.js")</script>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const openReadmeBtn = document.getElementById('open-readme');
+    if (openReadmeBtn) {
+      openReadmeBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        const { ipcRenderer } = require('electron');
+        ipcRenderer.send('open-readme-window');
+      });
+    }
+  });
+</script>
+</body>
+</html>

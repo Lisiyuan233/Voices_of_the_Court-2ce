@@ -16,6 +16,7 @@
         <li class="active"><a href="prompts.html" data-i18n="nav.prompts">Prompts</a></li>
         <li><a href="letters.html" data-i18n="nav.letters">Letters</a></li>
         <li><a href="diaries.html" data-i18n="nav.diaries">Diaries</a></li>
+        <li><a href="battleReport.html" data-i18n="nav.battleReport">Battle Reports</a></li>
         <li><a href="settings.html" data-i18n="nav.settings">Settings</a></li>
         <li><a href="system.html" data-i18n="nav.system">System</a></li>
         <li class="help-menu"><a href="#" id="open-readme" data-i18n="nav.help">Help</a></li>
@@ -215,6 +216,20 @@
                             <span class="token-count" id="suggestionPrompt-token-count"></span>
                         </div>
                         <config-textarea confID="suggestionPrompt" rows="6"></config-textarea>
+                    </div>
+
+                    <div class="input-group">
+                        <div class="prompt-header">
+                            <div>
+                                <label data-i18n="prompts.battleReportPrompt">Battle Report Prompt</label>
+                                <tooltip-text side="top" data-i18n="prompts.battleReportPrompt.tooltip">Instructions for the LLM when generating battle reports.</tooltip-text>
+                            </div>
+                            <span class="token-count" id="battleReportPrompt-token-count"></span>
+                        </div>
+                        <config-textarea confID="battleReportPrompt" rows="6"
+                            data-i18n-placeholder="prompts.battleReportPrompt"
+                            data-i18n-title="prompts.battleReportPrompt.tooltip">
+                        </config-textarea>
                     </div>
                 </div>
                 

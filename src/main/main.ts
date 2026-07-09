@@ -12,6 +12,7 @@ import { Letter } from "./letter/Letter.js";
 import { StoredLetter } from "./letter/letterInterfaces.js";
 import { LetterReplyGenerator } from "./letter/LetterReplyGenerator.js";
 import { LetterManager } from "./letter/LetterManager.js";
+import { BattleReportGenerator } from "./battleReport/BattleReportGenerator.js";
 import { parseLog } from "../shared/gameData/parseLog.js";
 import { parseLettersFromLog } from "./letter/parseLogForLetters.js";
 import { parseLogForBookmarks } from "./parseLogforbookmarks.js";
@@ -259,6 +260,7 @@ let diaryGenerator: DiaryGenerator;
 
 let letterThreadCount = 0;
 let letterThreadFullNotified = false;
+let lastBattleReportGenerator: BattleReportGenerator | null = null;
 
 let currentSessionPlayerId: string | null = null;
 let currentTotalDays: number = 0;
@@ -1289,6 +1291,33 @@ clipboardListener.on('VOTC:LETTER', async () => {
     }
 })
 
+clipboardListener.on('VOTC:BATTLE_REPORT', async () => {
+    console.log('ClipboardListener: VOTC:BATTLE_REPORT event detected.');
+    try {
+        const debugLogPath = path.join(config.userFolderPath, 'logs', 'debug.log');
+        const gameData = await parseLog(debugLogPath);
+        if (!gameData) {
+            console.error('Failed to parse game data from debug.log for battle report event.');
+            return;
+        }
+
+        // Overwrite stale date from parseLog with the fresh, tailed date
+        gameData.totalDays = currentTotalDays;
+        gameData.date = totalDaysToDateString(currentTotalDays);
+
+        const battleReportGenerator = new BattleReportGenerator(config, userDataPath);
+        lastBattleReportGenerator = battleReportGenerator;
+        await battleReportGenerator.generateBattleReport(gameData, debugLogPath, config.userFolderPath);
+
+        // Notify config page to refresh status
+        if (configWindow && !configWindow.window.isDestroyed()) {
+            configWindow.window.webContents.send('battle-report-status-changed');
+        }
+    } catch (error) {
+        console.error('Error processing VOTC:BATTLE_REPORT event:', error);
+    }
+})
+
 //IPC
 
 ipcMain.on('message-send', async (e, message: Message) =>{
@@ -1419,7 +1448,8 @@ const promptKeys = [
     'letterSummaryPrompt',
     'diaryPrompt',
     'diarySummarizePrompt',
-    'diaryForLetterPrompt'
+    'diaryForLetterPrompt',
+    'battleReportPrompt'
 ];
 
 ipcMain.on('config-change', (e, confID: string, newValue: any) =>{
@@ -1972,6 +2002,10 @@ ipcMain.handle('get-letter-thread-status', () => {
 
 ipcMain.handle('get-current-game-day', () => {
     return currentTotalDays;
+});
+
+ipcMain.handle('get-battle-report-statuses', () => {
+    return lastBattleReportGenerator?.getStatuses() || [];
 });
 
 ipcMain.handle('get-character-map', async (event, playerId) => {

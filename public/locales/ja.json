@@ -9,6 +9,7 @@
     "diaries": "日記",
     "prompts": "プロンプト",
     "letters": "手紙",
+    "battleReport": "戦況報告",
     "settings": "設定",
     "system": "システム",
     "help": "ヘルプ",
@@ -90,6 +91,8 @@
     "diary_for_letter_tooltip": "このプロンプトは、送信または受信した手紙に基づいて日記のエントリを生成するために使用されます。",
     "suggestion_prompt": "提案プロンプト",
     "suggestion_prompt_tooltip": "このプロンプトは、プレイヤーの応答提案を生成するために使用されます。",
+    "battleReportPrompt": "戦況報告プロンプト",
+    "battleReportPrompt.tooltip": "戦況報告を生成する際のLLMへの指示。このプロンプトは戦闘の事実とキャラクターの背景の後に追加されます。",
     "restore_defaults": "デフォルトのプロンプトを復元",
     "restore_tooltip": "このボタンをクリックすると、すべてのプロンプトがデフォルト値に復元されます",
     "presets_header": "プロンプトプリセット",
@@ -125,6 +128,16 @@
     "total_tokens_header": "合計トークン",
     "total_conversation_tokens": "合計会話トークン:",
     "total_letter_tokens": "合計手紙トークン:"
+  },
+  "battleReport": {
+    "refresh": "更新",
+    "slot": "スロット",
+    "status": "ステータス",
+    "status_pending": "保留中",
+    "status_fallback_written": "フォールバック書き込み済み",
+    "status_llm_completed": "生成済み",
+    "status_error": "エラー",
+    "no_reports": "戦況報告なし"
   },
   "settings": {
     "header": "設定",

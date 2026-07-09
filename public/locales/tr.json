@@ -9,6 +9,7 @@
     "diaries": "Günlükler",
     "prompts": "İstemler",
     "letters": "Mektuplar",
+    "battleReport": "Savaş raporları",
     "settings": "Ayarlar",
     "system": "Sistem",
     "help": "Yardım",
@@ -98,6 +99,8 @@
     "diary_for_letter_tooltip": "Bu istem, gönderilen veya alınan bir mektuba dayalı olarak bir günlük girişi oluşturmak için kullanılır.",
     "suggestion_prompt": "Öneri İstemi",
     "suggestion_prompt_tooltip": "Bu istem, oyuncu için yanıt önerileri oluşturmak için kullanılır.",
+    "battleReportPrompt": "Savaş raporu promptu",
+    "battleReportPrompt.tooltip": "Savaş raporları oluşturulurken LLM için talimatlar. Prompt, savaş gerçekleri ve karakter bağlamından sonra eklenir.",
     "restore_defaults": "Varsayılan İstemleri Geri Yükle",
     "restore_tooltip": "Tüm istemleri varsayılan değerlerine geri yüklemek için bu düğmeye tıklayın",
     "presets_header": "İstem Ön Ayarları",
@@ -136,6 +139,16 @@
     "total_tokens_header": "Toplam Token Sayısı",
     "total_conversation_tokens": "Toplam Konuşma Tokenları:",
     "total_letter_tokens": "Toplam Mektup Tokenları:"
+  },
+  "battleReport": {
+    "refresh": "Yenile",
+    "slot": "Yuva",
+    "status": "Durum",
+    "status_pending": "Bekliyor",
+    "status_fallback_written": "Yedek yazıldı",
+    "status_llm_completed": "Üretildi",
+    "status_error": "Hata",
+    "no_reports": "Savaş raporu yok"
   },
   "settings": {
     "header": "Ayarlar",

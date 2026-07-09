@@ -9,6 +9,7 @@
     "diaries": "日记",
     "prompts": "提示词",
     "letters": "信件",
+    "battleReport": "战报",
     "settings": "设置",
     "system": "系统",
     "help": "帮助",
@@ -94,6 +95,8 @@
     "letter_summary_tooltip": "用于总结信件往来的提示词。",
     "suggestion_prompt": "建议提示词",
     "suggestion_prompt_tooltip": "此提示词用于为玩家生成回应建议。",
+    "battleReportPrompt": "战报提示词",
+    "battleReportPrompt.tooltip": "LLM 生成战报时的指令。此提示词追加在战况事实和角色背景之后。",
     "restore_defaults": "恢复默认提示词",
     "restore_tooltip": "点击此按钮将所有提示词恢复为默认值",
     "presets_header": "提示词预设",
@@ -129,6 +132,16 @@
     "total_tokens_header": "总令牌数",
     "total_conversation_tokens": "总对话令牌数：",
     "total_letter_tokens": "总信件令牌数："
+  },
+  "battleReport": {
+    "refresh": "刷新",
+    "slot": "槽位",
+    "status": "状态",
+    "status_pending": "等待中",
+    "status_fallback_written": "保底已写入",
+    "status_llm_completed": "已生成",
+    "status_error": "错误",
+    "no_reports": "无战报"
   },
   "settings": {
     "header": "设置",
