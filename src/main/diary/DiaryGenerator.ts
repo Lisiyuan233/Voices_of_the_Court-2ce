@@ -59,7 +59,7 @@ export class DiaryGenerator {
         return prompt;
     }
 
-    public async generateDiaryEntry(gameData: GameData, conversation: Conversation, characterId: string): Promise<DiaryEntry | null> {
+    public async generateDiaryEntry(gameData: GameData, conversation: Conversation, characterId: string, checkpointEpoch: number = gameData.votcCheckpointEpoch): Promise<DiaryEntry | null> {
         const character = gameData.characters.get(parseInt(characterId));
         if (!character) {
           return null;
@@ -100,7 +100,7 @@ export class DiaryGenerator {
             return acc;
           }, {}),
           creationTimestamp: new Date(),
-          votcCheckpointEpoch: gameData.votcCheckpointEpoch
+          votcCheckpointEpoch: checkpointEpoch
         };
 
         return diaryEntry;

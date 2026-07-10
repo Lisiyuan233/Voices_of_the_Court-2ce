@@ -1627,6 +1627,8 @@ ${character.fullName}的发言：`
         this.runFileManager.write(`
 global_var:talk_first_scope = {
     set_variable = { name = votc_checkpoint_epoch value = ${nextCheckpointEpoch} }
+    set_variable = { name = votc_checkpoint_day value = current_date }
+    debug_log = "VOTC:CHECKPOINT/;/set/;/[THIS.Char.GetID]/;/${nextCheckpointEpoch}/;/[GetCurrentDate.GetStringShort]"
 }
           trigger_event = mcc_event_v2.9002
           trigger_event = mcc_event_v2.9003
@@ -1646,7 +1648,7 @@ global_var:talk_first_scope = {
                 if (wasInvolvedInAction) {
                     console.log(`Forcing diary entry for ${character.shortName} due to action involvement.`);
                 }
-                const newDiaryEntry = await this.diaryGenerator.generateDiaryEntry(this.gameData, this, character.id.toString());
+                const newDiaryEntry = await this.diaryGenerator.generateDiaryEntry(this.gameData, this, character.id.toString(), nextCheckpointEpoch);
                 if (newDiaryEntry) {
                     await saveDiaryFile(this.gameData.playerID.toString(), character.id.toString(), newDiaryEntry);
                     
