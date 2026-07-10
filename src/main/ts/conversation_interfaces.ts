@@ -37,6 +37,7 @@ export interface Summary{
     date: string,
     content: string,
     characterId?: string;
+    votcCheckpointEpoch?: number;
 }
 
 export interface ActionArgument{

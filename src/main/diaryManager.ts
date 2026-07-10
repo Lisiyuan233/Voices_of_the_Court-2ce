@@ -5,6 +5,7 @@ import path from 'path';
 import { app } from 'electron';
 import { DiaryEntry, DiarySummary } from './ts/diary_interfaces';
 import { randomUUID } from 'crypto';
+import { filterSummariesForCheckpoint } from './summaryManager.js';
 
 const userDataPath = path.join(app.getPath('userData'), 'votc_data');
 const diariesDir = path.join(userDataPath, 'diary_history');
@@ -26,44 +27,50 @@ function getDiarySummaryFilePath(playerId: string, characterId: string): string 
     return path.join(playerSummaryDir, `${characterId}.json`);
 }
 
-export async function readDiarySummaries(playerId: string, characterId: string): Promise<DiarySummary[]> {
+export async function readDiarySummaries(playerId: string, characterId: string, checkpointEpoch?: number): Promise<DiarySummary[]> {
     const summaryPath = getDiarySummaryFilePath(playerId, characterId);
     if (!fs.existsSync(summaryPath)) {
         return [];
     }
     const fileContent = await fs.promises.readFile(summaryPath, 'utf-8');
+    let result: DiarySummary[] = [];
     try {
         const data = JSON.parse(fileContent);
 
         if (Array.isArray(data)) {
             // New format (array of summaries).
-            return data.reduce((acc: DiarySummary[], s: any) => {
+            result = data.reduce((acc: DiarySummary[], s: any) => {
                 if (typeof s === 'object' && s !== null && s.summary && typeof s.date !== 'undefined') {
                     acc.push({
                         id: s.id || randomUUID(),
                         diaryEntryId: s.diaryEntryId || '',
                         date: s.date,
                         summary: s.summary,
-                        characterId: characterId
+                        characterId: characterId,
+                        votcCheckpointEpoch: s.votcCheckpointEpoch
                     });
                 }
                 return acc;
             }, []);
         } else if (typeof data === 'object' && data !== null && data.summary) {
             // Old format (single summary object), possibly without a date.
-            return [{
+            result = [{
                 id: randomUUID(),
                 diaryEntryId: '',
                 date: data.date || '', // Provide empty string if date is missing
                 summary: data.summary,
-                characterId: characterId
+                characterId: characterId,
+                votcCheckpointEpoch: data.votcCheckpointEpoch
             }];
         }
     } catch (error) {
         console.error(`Error parsing diary summary file ${summaryPath}:`, error);
     }
 
-    return [];
+    if (checkpointEpoch !== undefined) {
+        result = filterSummariesForCheckpoint(result, checkpointEpoch);
+    }
+    return result;
 }
 
 export async function saveDiarySummaries(playerId: string, characterId: string, summaries: DiarySummary[]): Promise<void> {
@@ -136,7 +143,7 @@ export async function getDiaryFiles(playerId: string): Promise<string[]> {
     return fs.readdirSync(playerDir).filter(file => file.endsWith('.json') && file !== '_character_map.json');
 }
 
-export async function readDiaryFile(playerId: string, characterId: string): Promise<{ diary_entries: DiaryEntry[] }> {
+export async function readDiaryFile(playerId: string, characterId: string, checkpointEpoch?: number): Promise<{ diary_entries: DiaryEntry[] }> {
     const filePath = getDiaryFilePath(playerId, characterId);
     if (!fs.existsSync(filePath)) {
         return { diary_entries: [] };
@@ -145,7 +152,10 @@ export async function readDiaryFile(playerId: string, characterId: string): Prom
         const content = fs.readFileSync(filePath, 'utf8');
         const data = JSON.parse(content);
         // Handle both array and object formats
-        const entries = Array.isArray(data) ? data : data.diary_entries || [];
+        let entries: DiaryEntry[] = Array.isArray(data) ? data : data.diary_entries || [];
+        if (checkpointEpoch !== undefined) {
+            entries = entries.filter(e => (e as any).votcCheckpointEpoch === undefined || (e as any).votcCheckpointEpoch <= checkpointEpoch);
+        }
         return { diary_entries: entries.sort((a: { date: string; }, b: { date: string; }) => new Date(b.date).getTime() - new Date(a.date).getTime()) };
     } catch (error) {
         console.error(`Error reading diary file for player ${playerId}, character ${characterId}:`, error);

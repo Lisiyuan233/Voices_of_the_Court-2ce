@@ -7,6 +7,7 @@ import { Letter as ILetter, LetterType, StoredLetter, LetterSummary } from "./le
 import { randomUUID } from 'crypto';
 import { Config } from '../../shared/Config.js';
 import { parseLettersFromLog } from './parseLogForLetters.js';
+import { filterSummariesForCheckpoint } from '../summaryManager.js';
 
 export class LetterManager {
     private static instance: LetterManager;
@@ -48,21 +49,25 @@ export class LetterManager {
         return path.join(playerFolderPath, `${characterId}.json`);
     }
 
-    public getLetters(playerId: string, characterId: string): ILetter[] {
+    public getLetters(playerId: string, characterId: string, checkpointEpoch?: number): ILetter[] {
         const filePath = this.getLetterFilePath(playerId, characterId);
         if (fs.existsSync(filePath)) {
             try {
                 const data = fs.readFileSync(filePath, 'utf8');
-                const letters = JSON.parse(data) as ILetter[];
+                let letters = JSON.parse(data) as ILetter[];
                 const playerNumericId = Number(playerId);
                 // Re-hydrate dates
-                return letters.map(l => ({
+                letters = letters.map(l => ({
                     ...l,
                     timestamp: new Date(l.timestamp),
                     creationTimestamp: l.creationTimestamp ? new Date(l.creationTimestamp) : new Date(l.timestamp),
                     isPlayerSender: l.sender.id === playerNumericId,
                     totalDays: l.totalDays || 0 // Ensure totalDays has a default value
                 }));
+                if (checkpointEpoch !== undefined) {
+                    letters = letters.filter(l => l.votcCheckpointEpoch === undefined || l.votcCheckpointEpoch <= checkpointEpoch);
+                }
+                return letters;
             } catch (error) {
                 console.error(`Error reading letter history for player ${playerId}, character ${characterId}:`, error);
                 return [];
@@ -71,7 +76,7 @@ export class LetterManager {
         return [];
     }
 
-    public getAllLetters(playerId: string): ILetter[] {
+    public getAllLetters(playerId: string, checkpointEpoch?: number): ILetter[] {
         const playerFolderPath = path.join(this.letterHistoryPath, playerId);
         if (!fs.existsSync(playerFolderPath)) {
             return [];
@@ -83,7 +88,7 @@ export class LetterManager {
         for (const file of files) {
             if (file.endsWith('.json')) {
                 const characterId = file.replace('.json', '');
-                const letters = this.getLetters(playerId, characterId);
+                const letters = this.getLetters(playerId, characterId, checkpointEpoch);
                 allLetters.push(...letters);
             }
         }
@@ -210,16 +215,20 @@ export class LetterManager {
         return path.join(playerFolderPath, `${characterId}.json`);
     }
 
-    public getLetterSummaries(playerId: string, characterId: string): LetterSummary[] {
+    public getLetterSummaries(playerId: string, characterId: string, checkpointEpoch?: number): LetterSummary[] {
         const filePath = this.getLetterSummaryFilePath(playerId, characterId);
         if (fs.existsSync(filePath)) {
             try {
                 const data = fs.readFileSync(filePath, 'utf8');
                 const summaries = JSON.parse(data) as any[];
-                return summaries.map(s => ({
+                const mapped = summaries.map(s => ({
                     id: s.id || randomUUID(), // Add UUID if missing
                     ...s
                 }));
+                if (checkpointEpoch !== undefined) {
+                    return filterSummariesForCheckpoint(mapped, checkpointEpoch);
+                }
+                return mapped;
             } catch (error) {
                 console.error(`Error reading letter summary for player ${playerId}, character ${characterId}:`, error);
                 return [];

@@ -2,8 +2,57 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 
+function getHistoryFileCheckpointEpoch(fileName: string): number | undefined {
+    const match = fileName.match(/_ckpt(\d+)_/);
+    if (!match) return undefined;
+    const epoch = Number(match[1]);
+    return Number.isFinite(epoch) ? epoch : undefined;
+}
+
+export async function parseConversationHistoryIdsFromLog(logFilePath: string): Promise<{playerId: string, checkpointEpoch?: number}> {
+    try {
+        if (!fs.existsSync(logFilePath)) {
+            throw new Error(`Log file not found: ${logFilePath}`);
+        }
+        const logContent = fs.readFileSync(logFilePath, 'utf8');
+        const lines = logContent.split('\n').filter(line => line.trim());
+        
+        let conversationHistoryLine = '';
+        for (let i = lines.length - 1; i >= 0; i--) {
+            if (lines[i].includes('VOTC:conversation_history')) {
+                conversationHistoryLine = lines[i];
+                break;
+            }
+        }
+        
+        if (!conversationHistoryLine) {
+            throw new Error('VOTC:conversation_history line not found in log');
+        }
+        
+        const parts = conversationHistoryLine.split('/;/');
+        if (parts.length < 2) {
+            throw new Error('Invalid VOTC:conversation_history line format');
+        }
+        
+        const playerId = parts[1].trim();
+        const checkpointEpoch = parts[2] !== undefined ? Number(parts[2].trim()) : undefined;
+        
+        if (!playerId) {
+            throw new Error('Failed to parse playerId from VOTC:conversation_history line');
+        }
+        
+        return {
+            playerId,
+            checkpointEpoch: Number.isFinite(checkpointEpoch) ? checkpointEpoch : undefined
+        };
+    } catch (error) {
+        console.error('Error parsing conversation history IDs:', error);
+        throw error;
+    }
+}
+
 // Read list of historical conversation files
-export async function getConversationHistoryFiles(playerId: string, currentCharacterIds: number[], limit: number): Promise<Array<{fileName: string, modifiedTime: number}>> {
+export async function getConversationHistoryFiles(playerId: string, currentCharacterIds: number[], limit: number, checkpointEpoch?: number): Promise<Array<{fileName: string, modifiedTime: number}>> {
     try {
         // Build path to conversation history directory - using userdata's conversation_history directory
         const userDataPath = app.getPath('userData');
@@ -27,14 +76,26 @@ export async function getConversationHistoryFiles(playerId: string, currentChara
             const timestamp = nameParts.pop(); // Remove and check timestamp
             if (isNaN(Number(timestamp))) return false;
 
-            const fileCharacterIds = new Set(nameParts);
+            // Handle _ckptN_ segment
+            let fileEpoch: number | undefined;
+            const lastPart = nameParts[nameParts.length - 1];
+            if (lastPart && lastPart.startsWith('ckpt')) {
+                nameParts.pop();
+                fileEpoch = Number(lastPart.replace('ckpt', ''));
+                if (!Number.isFinite(fileEpoch)) fileEpoch = undefined;
+            }
 
-            // Check if the set of character IDs in the filename matches the current conversation's character IDs.
-            if (fileCharacterIds.size !== currentIdSet.size) return false;
+            // Epoch filtering: hide files from the "future"
+            if (checkpointEpoch !== undefined && fileEpoch !== undefined && fileEpoch > checkpointEpoch) {
+                return false;
+            }
 
-            for (const id of currentIdSet) {
-                if (!fileCharacterIds.has(id)) {
-                    return false;
+            // Character ID matching - skip when currentCharacterIds is empty
+            if (currentCharacterIds.length > 0) {
+                const fileCharacterIds = new Set(nameParts);
+                if (fileCharacterIds.size !== currentIdSet.size) return false;
+                for (const id of currentIdSet) {
+                    if (!fileCharacterIds.has(id)) return false;
                 }
             }
             return true;

@@ -57,6 +57,7 @@ export type Relative = {
 export class GameData {
     date: string;
     totalDays: number;
+    votcCheckpointEpoch: number;
     scene: string;
     location: string;
     locationController: string;
@@ -82,6 +83,7 @@ export class GameData {
             this.aiName = removeTooltip(data[3]),
             this.date = data[4],
             this.totalDays = Number(data[8]),
+            this.votcCheckpointEpoch = Number(data[9]) || 0,
             this.scene = data[5].substring(11),
             this.location = data[6],
             this.locationController = data[7],
@@ -142,7 +144,7 @@ export class GameData {
 
     static fromPlainObject(obj: any): GameData {
         // Create a dummy instance because constructor requires a string array
-        const instance = new GameData(new Array(9).fill(''));
+        const instance = new GameData(new Array(10).fill(''));
         Object.assign(instance, obj);
 
         // Revive the characters Map from the plain object

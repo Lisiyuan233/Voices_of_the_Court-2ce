@@ -40,7 +40,7 @@ export class DiaryGenerator {
 
         // Add letter summaries
         const letterManager = LetterManager.getInstance();
-        const letterSummaries = letterManager.getLetterSummaries(String(gameData.playerID), characterId).slice(0, this.config.maxSummaries);
+        const letterSummaries = letterManager.getLetterSummaries(String(gameData.playerID), characterId, gameData.votcCheckpointEpoch).slice(0, this.config.maxSummaries);
         let letterSummaryContent = '';
         if (letterSummaries.length > 0) {
             const allSummaries = letterSummaries.map((summary, index) =>
@@ -99,7 +99,8 @@ export class DiaryGenerator {
             }
             return acc;
           }, {}),
-          creationTimestamp: new Date()
+          creationTimestamp: new Date(),
+          votcCheckpointEpoch: gameData.votcCheckpointEpoch
         };
 
         return diaryEntry;
@@ -132,7 +133,8 @@ export class DiaryGenerator {
                 }
                 return acc;
             }, {}),
-            creationTimestamp: new Date()
+            creationTimestamp: new Date(),
+            votcCheckpointEpoch: gameData.votcCheckpointEpoch
         };
     }
 

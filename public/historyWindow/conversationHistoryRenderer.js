@@ -80,7 +80,7 @@ async function loadConversationHistoryData() {
         showStatusMessage(loadingMsg, 'info');
         
         // 从debuglog解析玩家ID
-        const { playerId: pId } = await ipcRenderer.invoke('get-conversation-history-ids');
+        const { playerId: pId, checkpointEpoch } = await ipcRenderer.invoke('get-conversation-history-ids');
         
         if (!pId) {
             const noPlayerIdMsg = window.LocalizationManager ? window.LocalizationManager.getTranslation('history.no_player_id') : '无法从游戏日志中解析玩家ID';
@@ -93,7 +93,7 @@ async function loadConversationHistoryData() {
         playerIdInput.value = playerId;
         
         // 获取对话历史文件列表
-        conversationFiles = await ipcRenderer.invoke('get-conversation-history-files', playerId);
+        conversationFiles = await ipcRenderer.invoke('get-conversation-history-files', playerId, checkpointEpoch);
         
         // 渲染对话文件列表
         renderConversationList();

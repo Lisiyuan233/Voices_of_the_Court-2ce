@@ -77,6 +77,7 @@ export async function parseLettersFromLog(debugLogPath: string, gameData: GameDa
                         const correctedGameDate = totalDaysToDateString(gameData.totalDays);
                         const letter = Letter.fromLog(sender, recipient, letterId, content, correctedGameDate, delay, gameData.totalDays);
                         if (letter) {
+                            letter.votcCheckpointEpoch = gameData.votcCheckpointEpoch;
                             letters.push(letter);
                             // The player is the sender of the letter being imported from the log
                             LetterManager.getInstance().saveLetter(letter, senderIdFromLog);

@@ -23,6 +23,7 @@ import { randomUUID } from 'crypto';
 import {Message, MessageChunk, ErrorMessage, Summary, Action, ActionResponse, PendingAction} from '../ts/conversation_interfaces.js';
 import { parseGameDate } from '../../shared/dateUtils.js';
 import { getConversationHistoryFiles } from '../conversationHistory.js';
+import { archiveFutureSummaryFilesForPlayer, filterSummariesForCheckpoint } from '../summaryManager.js';
 import { getSimilarity } from '../../shared/stringUtils.js';
 import { parseVariables } from '../parseVariables.js';
 import { ActionEffectWriter } from './ActionEffectWriter.js';
@@ -182,6 +183,9 @@ export class Conversation{
             console.log(`Created player-specific summary directory for player ID: ${this.gameData.playerID}`);
         }
         
+        // Archive future summaries for the current checkpoint epoch
+        archiveFutureSummaryFilesForPlayer(this.userDataPath, String(this.gameData.playerID), this.gameData.votcCheckpointEpoch, 'conversation_open_checkpoint_filter');
+
         // Load summaries for all non-player characters
         this.gameData.characters.forEach((character) => {
             if (character.id !== this.gameData.playerID) {
@@ -199,15 +203,17 @@ export class Conversation{
                     fs.writeFileSync(summaryFilePath, JSON.stringify([], null, '\t'));
                     console.log(`No prior summaries found for AI ID ${character.id}. Initialized empty summaries file at ${summaryFilePath}.`);
                 }
-                this.summaries.set(character.id, characterSummaries);
+                const filteredSummaries = filterSummariesForCheckpoint(characterSummaries, this.gameData.votcCheckpointEpoch);
+                this.summaries.set(character.id, filteredSummaries);
 
                 // 设置文件监控，当文件变化时自动重新加载
                 this.summaryFileWatcher.watchFile(summaryFilePath, (updatedSummaries: Summary[]) => {
-                    this.summaries.set(character.id, updatedSummaries);
+                    const filteredUpdatedSummaries = filterSummariesForCheckpoint(updatedSummaries, this.gameData.votcCheckpointEpoch);
+                    this.summaries.set(character.id, filteredUpdatedSummaries);
                     console.log(`Automatically reloaded summaries for character ID ${character.id} due to file change`);
                 });
 
-                const characterLetters = this.letterManager.getLetters(String(this.gameData.playerID), String(character.id));
+                const characterLetters = this.letterManager.getLetters(String(this.gameData.playerID), String(character.id), this.gameData.votcCheckpointEpoch);
                 this.letters.set(character.id, characterLetters);
                 console.log(`Loaded ${characterLetters.length} letters for AI ID ${character.id}.`);
             }
@@ -285,7 +291,7 @@ export class Conversation{
         }
 
         const allCharacterIds = Array.from(this.gameData.characters.keys());
-        const historyFiles = await getConversationHistoryFiles(this.gameData.playerID.toString(), allCharacterIds, this.config.maxHistoricalConversations);
+        const historyFiles = await getConversationHistoryFiles(this.gameData.playerID.toString(), allCharacterIds, this.config.maxHistoricalConversations, this.gameData.votcCheckpointEpoch);
 
         const files = historyFiles
             .map(file => ({
@@ -1615,9 +1621,13 @@ ${character.fullName}的发言：`
     async summarize() {
         console.log('Starting end-of-conversation summarization process.');
         this.isOpen = false;
+        const nextCheckpointEpoch = this.gameData.votcCheckpointEpoch + 1;
         this.cancelGeneration(); // Cancel any ongoing generation.
         // Write a trigger event to the game (e.g., trigger conversation end event)
         this.runFileManager.write(`
+global_var:talk_first_scope = {
+    set_variable = { name = votc_checkpoint_epoch value = ${nextCheckpointEpoch} }
+}
           trigger_event = mcc_event_v2.9002
           trigger_event = mcc_event_v2.9003
        `);
@@ -1644,7 +1654,7 @@ ${character.fullName}的发言：`
                     const summaryResult = await this.diaryGenerator.summarizeDiaryEntry(newDiaryEntry, this.gameData);
                     if (summaryResult) {
                         const summaries = await readDiarySummaries(this.gameData.playerID.toString(), character.id.toString());
-                        summaries.unshift({ id: randomUUID(), ...summaryResult });
+                        summaries.unshift({ id: randomUUID(), ...summaryResult, votcCheckpointEpoch: nextCheckpointEpoch });
                         await saveDiarySummaries(this.gameData.playerID.toString(), character.id.toString(), summaries);
                     }
                 }
@@ -1674,6 +1684,7 @@ ${character.fullName}的发言：`
 
         // Build the text content to be saved
         let textContent = `Date: ${this.gameData.date}\n`;
+        textContent += `VOTC checkpoint: ${nextCheckpointEpoch}\n`;
         if (this.gameData.scene && this.gameData.scene.trim()) {
             textContent += `Scene: ${this.gameData.scene}\n`;
         }
@@ -1727,7 +1738,7 @@ ${character.fullName}的发言：`
             this.userDataPath,
             'conversation_history',
             this.gameData.playerID.toString(),
-            `${characterIdsString}_${new Date().getTime()}.txt`
+            `${characterIdsString}_ckpt${nextCheckpointEpoch}_${new Date().getTime()}.txt`
         );
         fs.writeFileSync(historyFile, textContent);
         console.log(`Conversation history saved to: ${historyFile}`)
@@ -1756,6 +1767,9 @@ ${character.fullName}的发言：`
         fs.writeFileSync(characterMapPath, JSON.stringify(characterMap, null, '\t'));
         console.log(`Updated character map at: ${characterMapPath}`);
 
+        // Archive future summaries before saving new ones with the next checkpoint epoch
+        archiveFutureSummaryFilesForPlayer(this.userDataPath, String(this.gameData.playerID), nextCheckpointEpoch, 'conversation_summary_save_checkpoint_filter');
+
         for (const character of this.gameData.characters.values()) {
             if (character.id === this.gameData.playerID) continue;
 
@@ -1768,7 +1782,8 @@ ${character.fullName}的发言：`
 
             const newSummary: Summary = {
                 date: this.gameData.date,
-                content: summaryContent
+                content: summaryContent,
+                votcCheckpointEpoch: nextCheckpointEpoch
             };
             console.log(`Generated new summary for conversation from ${character.fullName}'s perspective: ${newSummary.content.substring(0, 100)}...`);
 

@@ -19,6 +19,7 @@ export class Letter implements ILetter {
     delivered?: boolean;
     deliveryTimestamp?: Date;
     expectedDeliveryDate?: Date;
+    votcCheckpointEpoch?: number;
 
     constructor(
         id: string,

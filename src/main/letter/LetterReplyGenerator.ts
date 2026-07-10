@@ -6,7 +6,7 @@ import { Config } from "../../shared/Config";
 import { Message, Summary } from "../ts/conversation_interfaces";
 import * as fs from "fs";
 import * as path from "path";
-import { readSummaryFile, saveSummaryFile } from '../summaryManager.js';
+import { readSummaryFile, saveSummaryFile, archiveFutureSummaryFilesForPlayer } from '../summaryManager.js';
 import { createMemoryString } from '../conversation/promptBuilder.js';
 import { LetterManager } from "./LetterManager.js";
 import { Letter } from "./Letter.js";
@@ -65,7 +65,9 @@ export class LetterReplyGenerator {
         try {
             // @ts-ignore
             const depth = this.config.summaries_insert_depth || 3;
-            const summaries: Summary[] = await readSummaryFile(this.userDataPath, String(player.id));
+            // Archive future summaries before reading for letter prompt
+            archiveFutureSummaryFilesForPlayer(this.userDataPath, String(player.id), gameData.votcCheckpointEpoch, 'letter_prompt_checkpoint_filter');
+            const summaries: Summary[] = await readSummaryFile(this.userDataPath, String(player.id), gameData.votcCheckpointEpoch);
             const aiSummaries = summaries.filter(summary => summary.characterId === String(ai.id)).slice(0, depth);
             
             if (aiSummaries.length > 0) {
@@ -87,7 +89,7 @@ export class LetterReplyGenerator {
         const letterManager = LetterManager.getInstance();
         // @ts-ignore
         const depth = this.config.summaries_insert_depth || 3;
-        const letterSummaries = letterManager.getLetterSummaries(String(player.id), String(ai.id)).slice(0, depth);
+        const letterSummaries = letterManager.getLetterSummaries(String(player.id), String(ai.id), gameData.votcCheckpointEpoch).slice(0, depth);
         let letterSummaryContent = '';
         if (letterSummaries.length > 0) {
             const allSummaries = letterSummaries.map((summary, index) => 
@@ -276,6 +278,7 @@ export class LetterReplyGenerator {
                 undefined, // deliveryTimestamp (set on VOTC:LETTER_ACCEPTED)
                 expectedPlayerDeliveryDate // When the player should receive it
             );
+            replyLetter.votcCheckpointEpoch = gameData.votcCheckpointEpoch;
     
             // Atomically update the history file
             const otherCharacterId = aiId; // The file is named after the non-player character
@@ -368,7 +371,8 @@ export class LetterReplyGenerator {
                 id: randomUUID(),
                 date: letterDate,
                 summary: summaryContent.trim(),
-                letterIds: [originalLetter.id, replyLetterId]
+                letterIds: [originalLetter.id, replyLetterId],
+                votcCheckpointEpoch: gameData.votcCheckpointEpoch
             };
     
             const letterManager = LetterManager.getInstance();

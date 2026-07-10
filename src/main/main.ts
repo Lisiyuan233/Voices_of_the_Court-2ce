@@ -19,7 +19,7 @@ import { parseLogForBookmarks } from "./parseLogforbookmarks.js";
 import { processBookmarkToSummary } from "./bookmarktosummary.js";
 import { getPlayerId, getAllPlayerIds, readSummaryFile, saveSummaryFile, readCharacterMap, saveCharacterMap } from "./summaryManager.js";
 import { parseDiaryIdsFromLog, getAllDiaryPlayerIds, getDiaryFiles, readDiaryFile, saveDiaryFile, getCharacterMap as getDiaryCharacterMap, readDiarySummaries, saveDiarySummaries, getAllDiarySummaries } from "./diaryManager.js";
-import { getConversationHistoryFiles, readConversationHistoryFile } from "./conversationHistory.js";
+import { getConversationHistoryFiles, readConversationHistoryFile, parseConversationHistoryIdsFromLog } from "./conversationHistory.js";
 import { readPromptHistory, savePromptHistory } from "./promptHistory.js";
 import { Message, ActionResponse } from "./ts/conversation_interfaces.js";
 import { ActionEffectWriter } from "./conversation/ActionEffectWriter.js";
@@ -1245,7 +1245,7 @@ clipboardListener.on('VOTC:LETTER', async () => {
                     const summaryResult = await diaryGenerator.summarizeDiaryEntry(newEntry, gameData);
                     if (summaryResult) {
                         const summaries = await readDiarySummaries(String(gameData.playerID), String(playerCharacter.id));
-                        summaries.unshift({ id: randomUUID(), ...summaryResult });
+                        summaries.unshift({ id: randomUUID(), ...summaryResult, votcCheckpointEpoch: gameData.votcCheckpointEpoch });
                         await saveDiarySummaries(String(gameData.playerID), String(playerCharacter.id), summaries);
                     }
                 }
@@ -1277,7 +1277,7 @@ clipboardListener.on('VOTC:LETTER', async () => {
                     const summaryResult = await diaryGenerator.summarizeDiaryEntry(newEntry, gameData);
                     if (summaryResult) {
                         const summaries = await readDiarySummaries(String(gameData.playerID), String(aiCharacter.id));
-                        summaries.unshift({ id: randomUUID(), ...summaryResult });
+                        summaries.unshift({ id: randomUUID(), ...summaryResult, votcCheckpointEpoch: gameData.votcCheckpointEpoch });
                         await saveDiarySummaries(String(gameData.playerID), String(aiCharacter.id), summaries);
                     }
                 }
@@ -2169,10 +2169,19 @@ ipcMain.handle('regenerate-diary-summaries', async (event, { playerId, editedEnt
 
 // Conversation History IPC handlers
 
-ipcMain.handle('get-conversation-history-files', async (event, playerId) => {
+ipcMain.handle('get-conversation-history-ids', async () => {
+    try {
+        return await parseConversationHistoryIdsFromLog(path.join(config.userFolderPath, 'logs', 'debug.log'));
+    } catch (error) {
+        console.error('Error parsing conversation history IDs:', error);
+        return { playerId: '', checkpointEpoch: undefined };
+    }
+});
+
+ipcMain.handle('get-conversation-history-files', async (event, playerId, checkpointEpoch?: number) => {
     console.log(`IPC: Received get-conversation-history-files event for player: ${playerId}`);
     try {
-        const files = await getConversationHistoryFiles(playerId, [], 0);
+        const files = await getConversationHistoryFiles(playerId, [], 0, checkpointEpoch);
         return files;
     } catch (error) {
         console.error('Error getting conversation history files:', error);
@@ -2241,7 +2250,7 @@ ipcMain.handle('get-all-letters-for-player', async (event, playerId: string) => 
 ipcMain.on('get-letters', (event) => {
     console.log('IPC: Received get-letters event.');
     if (conversation) {
-        const letters = conversation.letterManager.getAllLetters(String(conversation.gameData.playerID));
+        const letters = conversation.letterManager.getAllLetters(String(conversation.gameData.playerID), conversation.gameData.votcCheckpointEpoch);
         event.sender.send('letters-data', letters);
     } else {
         // Fallback for when conversation is not active, maybe check last player ID?

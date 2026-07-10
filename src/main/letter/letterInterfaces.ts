@@ -25,6 +25,7 @@ export interface Letter {
   deliveryTimestamp?: Date;
   expectedDeliveryDate?: Date;
   isPlayerSender?: boolean;
+  votcCheckpointEpoch?: number;
   characterContext?: {
     playerId: string;
     playerName: string;
@@ -49,4 +50,5 @@ export interface LetterSummary {
   date: string;
   summary: string;
   letterIds: string[]; // To track which letters this summary covers
+  votcCheckpointEpoch?: number;
 }

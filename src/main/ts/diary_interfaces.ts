@@ -7,6 +7,7 @@ export interface DiaryEntry {
     content: string;
     character_traits: { [key: string]: string };
     creationTimestamp?: Date;
+    votcCheckpointEpoch?: number;
 }
 
 export interface DiarySummary {
@@ -15,4 +16,5 @@ export interface DiarySummary {
     date: string;
     summary: string;
     characterId?: string;
+    votcCheckpointEpoch?: number;
 }

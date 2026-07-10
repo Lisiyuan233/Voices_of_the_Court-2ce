@@ -2,6 +2,127 @@ import fs from 'fs';
 import path from 'path';
 import { Summary } from './ts/conversation_interfaces';
 
+function getSummaryCheckpointEpoch(summary: any): number | undefined {
+    const rawEpoch = summary?.votcCheckpointEpoch;
+    if (rawEpoch === undefined || rawEpoch === null || rawEpoch === '') {
+        return undefined;
+    }
+    const epoch = Number(rawEpoch);
+    return Number.isFinite(epoch) ? epoch : undefined;
+}
+
+export function splitSummariesForCheckpoint<T extends { votcCheckpointEpoch?: number }>(summaries: T[], checkpointEpoch: number): { visibleSummaries: T[], futureSummaries: T[] } {
+    const visibleSummaries: T[] = [];
+    const futureSummaries: T[] = [];
+    summaries.forEach((summary) => {
+        const summaryEpoch = getSummaryCheckpointEpoch(summary);
+        if (summaryEpoch !== undefined && summaryEpoch > checkpointEpoch) {
+            futureSummaries.push(summary);
+        } else {
+            visibleSummaries.push(summary);
+        }
+    });
+    return { visibleSummaries, futureSummaries };
+}
+
+export function filterSummariesForCheckpoint<T extends { votcCheckpointEpoch?: number }>(summaries: T[], checkpointEpoch: number): T[] {
+    return splitSummariesForCheckpoint(summaries, checkpointEpoch).visibleSummaries;
+}
+
+export function archiveFutureSummariesForCheckpoint(
+    userDataPath: string,
+    playerId: string,
+    characterId: string,
+    summaries: any[],
+    checkpointEpoch: number,
+    options: { sourceFilePath?: string, reason?: string } = {}
+): { visibleSummaries: any[], archivedSummaries: any[], archiveFilePath?: string } {
+    const { visibleSummaries, futureSummaries } = splitSummariesForCheckpoint(summaries, checkpointEpoch);
+    if (futureSummaries.length === 0) {
+        return { visibleSummaries, archivedSummaries: [] };
+    }
+
+    const archiveDir = path.join(userDataPath, 'conversation_summaries_archived', playerId);
+    fs.mkdirSync(archiveDir, { recursive: true });
+
+    const archiveFilePath = path.join(archiveDir, `${characterId}.json`);
+    let existingArchivedSummaries: any[] = [];
+    if (fs.existsSync(archiveFilePath)) {
+        try {
+            const parsed = JSON.parse(fs.readFileSync(archiveFilePath, 'utf8'));
+            if (Array.isArray(parsed)) {
+                existingArchivedSummaries = parsed;
+            }
+        } catch (error) {
+            console.error(`Failed to read archive file ${archiveFilePath}:`, error);
+        }
+    }
+
+    const archivedAt = new Date().toISOString();
+    const archivedSummaries = futureSummaries.map((summary) => ({
+        ...summary,
+        archivedAt,
+        archiveReason: options.reason ?? 'older_save_checkpoint',
+        archivedFromCheckpointEpoch: checkpointEpoch,
+        archivedSourcePlayerId: playerId,
+        archivedSourceCharacterId: characterId,
+        archivedSourceFilePath: options.sourceFilePath
+    }));
+
+    const mergedArchivedSummaries: any[] = [];
+    const seenKeys = new Set<string>();
+    [...archivedSummaries, ...existingArchivedSummaries].forEach((summary) => {
+        const key = [
+            summary?.archivedSourcePlayerId ?? '',
+            summary?.archivedSourceCharacterId ?? summary?.characterId ?? '',
+            getSummaryCheckpointEpoch(summary) ?? '',
+            summary?.date ?? '',
+            summary?.content ?? ''
+        ].join('\u001f');
+        if (!seenKeys.has(key)) {
+            seenKeys.add(key);
+            mergedArchivedSummaries.push(summary);
+        }
+    });
+
+    fs.writeFileSync(archiveFilePath, JSON.stringify(mergedArchivedSummaries, null, '\t'), 'utf8');
+    return { visibleSummaries, archivedSummaries, archiveFilePath };
+}
+
+export function archiveFutureSummaryFilesForPlayer(userDataPath: string, playerId: string, checkpointEpoch: number, reason: string = 'older_save_checkpoint'): number {
+    const summaryDir = path.join(userDataPath, 'conversation_summaries', playerId);
+    if (!fs.existsSync(summaryDir)) {
+        return 0;
+    }
+
+    let archivedCount = 0;
+    const files = fs.readdirSync(summaryDir).filter(file => file.endsWith('.json') && file !== '_character_map.json');
+
+    files.forEach((file) => {
+        const summaryFilePath = path.join(summaryDir, file);
+        try {
+            const summaries = JSON.parse(fs.readFileSync(summaryFilePath, 'utf8'));
+            if (!Array.isArray(summaries)) return;
+
+            const characterId = path.basename(file, '.json');
+            const result = archiveFutureSummariesForCheckpoint(userDataPath, playerId, characterId, summaries, checkpointEpoch, {
+                sourceFilePath: summaryFilePath,
+                reason
+            });
+
+            if (result.archivedSummaries.length > 0) {
+                fs.writeFileSync(summaryFilePath, JSON.stringify(result.visibleSummaries, null, '\t'), 'utf8');
+                archivedCount += result.archivedSummaries.length;
+                console.log(`Archived ${result.archivedSummaries.length} future summaries from ${summaryFilePath} for checkpoint ${checkpointEpoch}.`);
+            }
+        } catch (error) {
+            console.error(`Failed to archive future summaries ${summaryFilePath}:`, error);
+        }
+    });
+
+    return archivedCount;
+}
+
 /**
  * Gets all player IDs by scanning summary directories.
  * @param userDataPath The path to the user data directory (e.g., .../votc_data).
@@ -109,7 +230,7 @@ export async function getPlayerId(userDataPath: string): Promise<{playerId: stri
  * @param playerId The ID of the player whose summaries to read.
  * @returns A promise that resolves to an array of all summaries.
  */
-export async function readSummaryFile(userDataPath: string, playerId: string): Promise<Summary[]> {
+export async function readSummaryFile(userDataPath: string, playerId: string, checkpointEpoch?: number): Promise<Summary[]> {
     try {
         const summaryDir = path.join(userDataPath, 'conversation_summaries', playerId);
         
@@ -140,8 +261,13 @@ export async function readSummaryFile(userDataPath: string, playerId: string): P
             }
         }
         
+        // Apply checkpoint filter
+        const visibleSummaries = checkpointEpoch === undefined
+            ? allSummaries
+            : filterSummariesForCheckpoint(allSummaries, checkpointEpoch);
+
         // Sort by date
-        allSummaries.sort((a, b) => {
+        visibleSummaries.sort((a, b) => {
             const extractDate = (dateStr: string) => {
                 if (!dateStr) return { year: 0, month: 1, day: 1 };
                 const match = dateStr.match(/(\d+)年(\d+)月(\d+)日/);
@@ -161,7 +287,7 @@ export async function readSummaryFile(userDataPath: string, playerId: string): P
             return dateB.day - dateA.day;
         });
         
-        return allSummaries;
+        return visibleSummaries;
     } catch (error) {
         console.error('Error reading summary file:', error);
         throw error;
@@ -174,7 +300,7 @@ export async function readSummaryFile(userDataPath: string, playerId: string): P
  * @param playerId The ID of the player.
  * @param summaries An array of all summaries to save.
  */
-export async function saveSummaryFile(userDataPath: string, playerId: string, summaries: Summary[]): Promise<void> {
+export async function saveSummaryFile(userDataPath: string, playerId: string, summaries: Summary[], checkpointEpoch?: number): Promise<void> {
     try {
         const summaryDir = path.join(userDataPath, 'conversation_summaries', playerId);
         
@@ -207,8 +333,28 @@ export async function saveSummaryFile(userDataPath: string, playerId: string, su
                 return cleanSummary;
             });
             
+            // Archive future summaries before saving if checkpoint epoch is provided
+            if (checkpointEpoch !== undefined && fs.existsSync(summaryFilePath)) {
+                try {
+                    const existingSummaries = JSON.parse(fs.readFileSync(summaryFilePath, 'utf8'));
+                    if (Array.isArray(existingSummaries)) {
+                        archiveFutureSummariesForCheckpoint(userDataPath, playerId, characterId, existingSummaries, checkpointEpoch, {
+                            sourceFilePath: summaryFilePath,
+                            reason: 'save_summary_file_checkpoint_filter'
+                        });
+                    }
+                } catch (error) {
+                    console.error(`Failed to archive before save ${summaryFilePath}:`, error);
+                }
+            }
+
+            // Apply checkpoint filter to summaries being saved
+            const summariesToSave = checkpointEpoch === undefined
+                ? cleanSummaries
+                : filterSummariesForCheckpoint(cleanSummaries, checkpointEpoch);
+            
             // Write to file
-            fs.writeFileSync(summaryFilePath, JSON.stringify(cleanSummaries, null, '\t'), 'utf8');
+            fs.writeFileSync(summaryFilePath, JSON.stringify(summariesToSave, null, '\t'), 'utf8');
         }
 
         // Delete summaries for characters that were removed
