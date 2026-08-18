@@ -1,0 +1,21 @@
+# 统一行尾：仓库内一律存 LF，工作区也保持 LF（本工作区跨 Windows/WSL 共用，
+# 依赖 core.autocrlf 会在一侧产生全量脏文件，因此显式写死 eol=lf）
+* text=auto eol=lf
+
+# 二进制资源：禁止任何行尾/编码转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.icns binary
+*.dds  binary
+*.otf  binary
+*.ttf  binary
+*.woff binary
+*.woff2 binary
+*.zip  binary
+*.7z   binary
+*.exe  binary
+*.dll  binary
+*.node binary
