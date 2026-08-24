@@ -139,6 +139,7 @@ VOTC:IN/;/init/;/1000/;/Player One/;/2000/;/Duke AI/;/1187.01.01/;/talk_scene_co
 VOTC:IN/;/character/;/2000/;/Duke AI/;/Duke AI the Wise/;/Duchy of Somewhere/;/he/;/34/;/250/;/20/;/Heterosexual/;/ambitious, brave/;/10/;/1/;/King Bob/;/None/;/Frankish/;/Catholic/;/House de Somewhere/;/1/;/AI/;/Some County/;/King Bob/;/12/;/1/;/feudal/;/1/;/Councillor, Marshal/;/duchy
 VOTC:IN/;/legitimacy/;/2000/;/no
 VOTC:IN/;/laws/;/2000/;
+VOTC:IN/;/stress/;/2000/;/7/;/Broken/;
 VOTC:IN/;/troops_eob/;/2000/;/
 ```
 
@@ -149,7 +150,7 @@ git add tests/fixtures/debuglog_p0.txt tests/fixtures/debuglog_p0_fallbacks.txt
 git commit -m "test: 新增 P0 数据类型合成日志 fixture"
 ```
 
-注：行尾分隔符以 mod 发射模板为准；laws 空值时行自然以 `/;` 结束属真实形态。
+注：行尾分隔符以 mod 发射模板为准；laws 空值时行自然以 `/;` 结束属真实形态；边界 fixture 中的悬空 stress 行是钉住解析器归一化契约的合成样本，非真实发射形态。
 
 ---
 
