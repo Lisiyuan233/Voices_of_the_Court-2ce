@@ -115,7 +115,7 @@ VOTC:IN/;/levies_dom/;/2000/;/450
 VOTC:IN/;/levies_theo/;/2000/;/100
 VOTC:IN/;/maa/;/2000/;/Armored Footmen/;/1/;/120
 VOTC:IN/;/maa/;/2000/;/Spearmen/;/0/;/80
-VOTC:IN/;/troops_eob/;/2000/;
+VOTC:IN/;/troops_eob/;/2000/;/
 VOTC:IN/;/laws/;/2000/;/Crown Authority III
 VOTC:IN/;/laws/;/2000/;/Male Preference Succession
 VOTC:IN/;/laws/;/2000/;/High Tax
@@ -124,12 +124,12 @@ VOTC:IN/;/modifier/;/2000/;/mod_wounded/;/Wounded/;/This character is wounded an
 VOTC:IN/;/modifier/;/2000/;/mod_drunk/;/Drunk/;/This character is drunk.
 VOTC:IN/;/k_secret/;/2000/;/Murdered Father/;/He murdered his father./;/Murder/;/secret_murder
 VOTC:IN/;/k_secret_owner/;/2000/;/3000/;/Count Bad
-VOTC:IN/;/k_secret_is_criminal/;/2000/;
+VOTC:IN/;/k_secret_is_criminal/;/2000/;/
 VOTC:IN/;/k_secret_target/;/2000/;/3000/;/Count Bad
 VOTC:IN/;/k_secret_spent/;/2000/;/no
 VOTC:IN/;/k_secret_can_be_exposed/;/2000/;/yes
 VOTC:IN/;/k_secret_knower/;/2000/;/Murdered Father/;/4000/;/Bishop Curious
-VOTC:IN/;/k_secret_eob/;/2000/;
+VOTC:IN/;/k_secret_eob/;/2000/;/
 ```
 
 - [ ] **Step 2: 写边界 fixture `tests/fixtures/debuglog_p0_fallbacks.txt`**
@@ -139,7 +139,7 @@ VOTC:IN/;/init/;/1000/;/Player One/;/2000/;/Duke AI/;/1187.01.01/;/talk_scene_co
 VOTC:IN/;/character/;/2000/;/Duke AI/;/Duke AI the Wise/;/Duchy of Somewhere/;/he/;/34/;/250/;/20/;/Heterosexual/;/ambitious, brave/;/10/;/1/;/King Bob/;/None/;/Frankish/;/Catholic/;/House de Somewhere/;/1/;/AI/;/Some County/;/King Bob/;/12/;/1/;/feudal/;/1/;/Councillor, Marshal/;/duchy
 VOTC:IN/;/legitimacy/;/2000/;/no
 VOTC:IN/;/laws/;/2000/;
-VOTC:IN/;/troops_eob/;/2000/;
+VOTC:IN/;/troops_eob/;/2000/;/
 ```
 
 - [ ] **Step 3: Commit**
@@ -148,6 +148,8 @@ VOTC:IN/;/troops_eob/;/2000/;
 git add tests/fixtures/debuglog_p0.txt tests/fixtures/debuglog_p0_fallbacks.txt
 git commit -m "test: 新增 P0 数据类型合成日志 fixture"
 ```
+
+注：行尾分隔符以 mod 发射模板为准；laws 空值时行自然以 `/;` 结束属真实形态。
 
 ---
 
