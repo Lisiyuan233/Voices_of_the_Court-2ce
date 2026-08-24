@@ -536,7 +536,7 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
     return gameData!;
 }
 
-function extractMultilinePayload(element: string | undefined): string {
+export function extractMultilinePayload(element: string | undefined): string {
     if (!element) return "";
     const startIdx = element.indexOf('STARTMULTILINE');
     if (startIdx === -1) return element.trim();
