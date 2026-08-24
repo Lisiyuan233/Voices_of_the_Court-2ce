@@ -75,6 +75,19 @@ i18n 键校验与回落检查；为合并 mod 补 `package_mod.py` 式安装脚�
 - 所有移植模块保持"整目录 + 显式 IPC 注册 + 注入式存储根"形态，禁止把新逻辑塞进 `main.ts` 内联实现。
 - 2CE 既有的 epoch 过滤/归档机制保留作为 fallback，血统戳存在时优先走 resolver。
 
+## 4.1 文件级复制协议
+
+前提事实：两边 `tsconfig.json` 编译选项逐字节一致（es6/commonjs/strict/esModuleInterop）、同为 Electron 33 + Forge、后端集群不依赖 i18n——文件级复制因此是主迁移方式，但须按下列分类执行：
+
+| 类别 | 对象 | 处理方式 |
+|---|---|---|
+| A 叶子缺口 | `shared/gameData/{CampaignIdentity,ck3Text,gameDate,saveSnapshotProtocol,timelineProtocol}.ts` | 原样复制（无下游依赖） |
+| B 同名漂移 | `shared/{apiConnection,Config}.ts`、`shared/gameData/{Character,GameData,parseLog}.ts` | **禁止整文件替换**；以 2CE 为底增量合并缺失成员，靠 `npm run build` 的 strict 报错清单定位 |
+| C 脚手架牵连 | `campaignDataPaths`、`campaignIdentityResolver`、`history/HistoryRecordReaders`、`letter/letterHistoryRecord`、`promptWorkbench/{atomicJson,canonicalJson}`、`ts/conversation_interfaces`、`battleReportGameDate` | 纯工具直接复制；campaign* 按 §3/P6 命名空间决策改造 |
+| D 接线点 | main.ts IPC 注册、窗口创建、ClipboardListener 分支、RunFileManager 写入器、public 页面 locale 键 | 手工对接；翻译统一走 2CE LocalizationManager，不得引入 1.x 双字典机制 |
+
+每阶段固定流程：圈定封闭依赖集复制 → build 驱动修断点 → 增量合并 → 接线 → 随迁 jest（首个带测试阶段一次性搬 `jest.config.js`、自定义 resolver 与 ts-jest 依赖，此后各阶段纯复制测试目录）。
+
 ## 5. 兼容红线
 
 1. `VOTC:IN` init 尾部扩展必须携带 schema 版本号；解析端对缺尾部字段的旧日志按 legacy 路径处理，不抛错阻断。
