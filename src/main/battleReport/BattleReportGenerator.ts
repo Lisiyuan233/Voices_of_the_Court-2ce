@@ -7,21 +7,28 @@ import { getEffectivePrompts } from "../conversation/promptBuilder";
 import * as fs from "fs";
 import * as path from "path";
 
-type BattleOutcome = "victory" | "defeat";
-type BattleSide = "attacker" | "defender";
+export type BattleOutcome = "victory" | "defeat";
+export type BattleSide = "attacker" | "defender";
 type CommanderSide = "winner" | "loser";
 type NotableBattleCharacterType = "slain_loser_side" | "slain_winner_side" | "captured_loser_side";
 
-interface BattleCommander {
+export interface BattleCommander {
     side: CommanderSide;
     id: string;
     name: string;
 }
 
-interface NotableBattleCharacter {
+export interface NotableBattleCharacter {
     type: NotableBattleCharacterType;
     id: string;
     name: string;
+}
+
+export interface BattleSideResult {
+    participantId: string;
+    initialTroops: number;
+    lostTroops: number;
+    survivingTroops: number;
 }
 
 interface BattleReportData {
