@@ -36,6 +36,7 @@ import { UnsupportedTimelineSchemaError } from '../../shared/gameData/timelinePr
 import { requireCampaignIdentity, CampaignIdentityUnavailableError } from '../campaignIdentityResolver.js';
 import { reportCampaignIdentityUnavailable, reportCorruptTimelineRegistry, reportTimelineParentNotFound, reportUnsupportedTimelineSchema } from '../timelineRegistryRecovery.js';
 import { runConversationTimelineTransition } from '../timelineBusinessWire.js';
+import { conversationHistoryDir as campaignConversationHistoryDir } from '../campaignDataPaths.js';
 
 // Fallback close effect used when the timeline transition fails: closes the
 // CK3 conversation window WITHOUT advancing checkpoint state. Mirrors the
@@ -326,21 +327,18 @@ export class Conversation{
         
         console.log('Attempting to load historical conversation history.');
         console.log('showPreviousConversations config value:', this.config.showPreviousConversations);
-        const historyDir = path.join(this.userDataPath, 'conversation_history', this.gameData.playerID.toString());
-        console.log('Looking for historical conversations in:', historyDir);
-        
-        if (!fs.existsSync(historyDir)) {
-            console.log('No history directory found for this player.');
-            return;
-        }
 
         const allCharacterIds = Array.from(this.gameData.characters.keys());
-        const historyFiles = await listPromptTranscriptFiles(this.gameData.playerID.toString(), allCharacterIds, this.config.maxHistoricalConversations, this.gameData.votcCheckpointEpoch);
+        // Directory routing matches the summarize() write side: campaign-
+        // scoped when an identity was captured, with a union over the legacy
+        // player dir so pre-existing transcripts stay visible.
+        const historyFiles = await listPromptTranscriptFiles(this.gameData.playerID.toString(), allCharacterIds, this.config.maxHistoricalConversations, this.gameData.votcCheckpointEpoch, this.campaignIdentity);
 
         const files = historyFiles
             .map(file => ({
                 name: file.fileName,
-                time: file.modifiedTime
+                time: file.modifiedTime,
+                sourceDir: file.sourceDir
             }))
             .sort((a, b) => a.time - b.time); // Sort by timestamp, oldest first
 
@@ -375,7 +373,7 @@ export class Conversation{
                 break;
             }
             
-            const filePath = path.join(historyDir, fileInfo.name);
+            const filePath = path.join(fileInfo.sourceDir, fileInfo.name);
             console.log(`Loading historical conversation from: ${filePath}`);
             
             try {
@@ -1817,8 +1815,12 @@ ${timelineLines}
             }
         }
 
-        // Ensure the conversation_history directory exists
-        const historyDir = path.join(this.userDataPath, 'conversation_history' ,this.gameData.playerID.toString());
+        // Ensure the conversation_history directory exists (campaign-scoped
+        // when identity is captured, legacy player-only otherwise for
+        // display). Mirrors 1.x Conversation.ts:2695-2699.
+        const historyDir = this.campaignIdentity
+            ? campaignConversationHistoryDir(app.getPath('userData'), this.campaignIdentity)
+            : path.join(this.userDataPath, 'conversation_history', this.gameData.playerID.toString());
 
         if (!fs.existsSync(historyDir)) {
           fs.mkdirSync(historyDir, { recursive: true });
@@ -1887,13 +1889,15 @@ ${timelineLines}
           textContent += '\n';
         });
 
-        // Store the message text for generating summaries in txt format
+        // Store the message text for generating summaries in txt format.
+        // Must derive from `historyDir` above: for v2 sessions that directory
+        // is campaign-scoped, and writing to the legacy player path instead
+        // would strand the transcript outside the viewer's read location
+        // (1.x Conversation.ts:2803-2810).
         const allCharacterIds = Array.from(this.gameData.characters.keys());
         const characterIdsString = allCharacterIds.join('_');
         const historyFile = path.join(
-            this.userDataPath,
-            'conversation_history',
-            this.gameData.playerID.toString(),
+            historyDir,
             `${characterIdsString}_ckpt${nextCheckpointEpoch}_${new Date().getTime()}.txt`
         );
         fs.writeFileSync(historyFile, textContent);
