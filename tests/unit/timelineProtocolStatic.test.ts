@@ -4,17 +4,26 @@ import {
     TIMELINE_PROTOCOL_SCHEMA,
     TIMELINE_CAMPAIGN_SCHEMA,
     PROTOCOL_TAIL_FIELD_COUNT,
-    INIT_CORE_FIELD_COUNT,
-    INIT_DATE_EXTRA_FIELD_COUNT
+    INIT_CORE_FIELD_COUNT
 } from '../../src/shared/gameData/timelineProtocol';
-import {
-    INIT_SAVE_SNAPSHOT_EXTRA_FIELD_COUNT,
-    INIT_SAVE_SNAPSHOT_EXTRA_START_INDEX
-} from '../../src/shared/gameData/saveSnapshotProtocol';
 import { buildBattleReportRunScript } from '../../src/main/battleReport/battleReportRunScript';
 
+/**
+ * Static contract test locking the 2CE app ↔ voices_of_the_court_mod2 ce
+ * pairing. MOD_ROOT points at the mod this Electron app actually ships with.
+ *
+ * Scope decision (P6): the 2CE init-line protocol is 24 fields — the 15-field
+ * core, the 8-field protocol tail and a single debug save-snapshot protocol
+ * placeholder at index 23. The conversation session/roster tail fields that
+ * voices_of_the_court_mod1 later evolved (36-field init lines) are NOT part
+ * of the 2CE protocol, and neither are the mod1-only save-snapshot effect
+ * wiring, manager clipboard payloads, letter delivery ids or chronicle pulse
+ * events; those sections of the ported 1.x test were therefore dropped here
+ * rather than pointed at a mod this app does not read.
+ */
+
 const PROJECT_ROOT = path.resolve(__dirname, '../..');
-const MOD_ROOT = path.resolve(PROJECT_ROOT, '../voices_of_the_court_mod1');
+const MOD_ROOT = path.resolve(PROJECT_ROOT, '../voices_of_the_court_mod2 ce');
 
 function readModFile(relativePath: string): string {
     return fs.readFileSync(path.join(MOD_ROOT, relativePath), 'utf-8');
@@ -34,27 +43,10 @@ function splitFields(line: string): string[] {
     return line.split('/;/').map(s => s.trim());
 }
 
-function findYmlValues(content: string, keyPattern: RegExp): string[] {
-    const values: string[] = [];
-    for (const line of content.split(/\r?\n/)) {
-        const match = line.match(keyPattern);
-        if (match) {
-            const valueMatch = line.match(/:\d+\s+"(.*)"\s*$/);
-            if (valueMatch) values.push(valueMatch[1]);
-        }
-    }
-    return values;
-}
-
 const INIT_PRODUCER_FILES = [
-    'common/scripted_effects/log_gamedata_effect.txt',
-    'common/scripted_effects/log_gamedata_v2_effect.txt',
     'common/scripted_effects/log_gamedata_v3_effect.txt',
-    'common/scripted_effects/log_gamedata_v4_effect.txt',
-    'common/scripted_effects/log_meet_gamedata_effect.txt',
-    'common/scripted_effects/log_sidebar_conversation_effect.txt',
-    'common/scripted_effects/log_incoming_letter_gamedata_effect.txt',
-    'events/votc_military_council_events.txt'
+    'common/scripted_effects/log_gamedata_v3l_effect.txt',
+    'common/scripted_effects/log_gamedata_v3s_effect.txt'
 ];
 
 // Phase 4: producers emit real campaign identity sourced from CK3 global
@@ -86,21 +78,38 @@ function expectInitProducerTail(tail: string[]): void {
     expect(tail[7]).toBe(PLAYER_TIMELINE_SCHEMA_TOKEN);
 }
 
-const INIT_DATE_EXTRA_START_INDEX = INIT_CORE_FIELD_COUNT + PROTOCOL_TAIL_FIELD_COUNT;
-const EXPECTED_INIT_FIELD_COUNT_WITH_SAVE_SNAPSHOT = INIT_SAVE_SNAPSHOT_EXTRA_START_INDEX + INIT_SAVE_SNAPSHOT_EXTRA_FIELD_COUNT;
-const EXPECTED_SAVE_SNAPSHOT_TOKENS = [
-    "[GetPlayer.MakeScope.Var('votc_save_snapshot_protocol').GetValue|0]",
-    "[GetPlayer.MakeScope.Var('votc_save_snapshot_sequence').GetValue|0]",
-    "[GetPlayer.MakeScope.Var('votc_save_snapshot_slot').GetValue|0]"
+// 2CE init layout (indices after slicing off the "VOTC:IN/;/init" prefix),
+// aligned with INIT_LAYOUT in src/shared/gameData/timelineProtocol.ts:
+//   data[0..7]  playerID, playerName, otherID, otherName, shortDate,
+//               scene, location, locationController
+//   data[8]     checkpoint epoch; data[9..14] nodeA/nodeB/parentA/
+//               parentB/checkpointToken/pendingCheckpointToken
+//   data[15..22] the 8-field protocol tail
+//   data[23]    debug save-snapshot protocol read placeholder (single field;
+//               mod2 ce never writes the variable, so it parses as 0)
+// Unlike mod1 there is NO date-extra block and NO conversation session tail.
+const EXPECTED_INIT_FIELD_COUNT = INIT_CORE_FIELD_COUNT + PROTOCOL_TAIL_FIELD_COUNT + 1;
+const CHECKPOINT_EPOCH_TOKEN = "[GetPlayer.MakeScope.Var('votc_checkpoint_epoch').GetValue|0]";
+const EXPECTED_INIT_CORE_TOKENS = [
+    '[GetPlayer.GetID]',
+    '[GetPlayer.GetTitledFirstNameNicknamedNoTooltipRegnal]',
+    '[recipient.GetID]',
+    '[recipient.GetTitledFirstNameNicknamedNoTooltipRegnal]',
+    '[GetCurrentDate.GetStringShort]',
+    "[GetGlobalVariable('talk_scene').GetFlagName]",
+    '[recipient.GetCurrentLocation.GetName]',
+    '[recipient.GetCurrentLocation.GetController.GetFullNameNicknamedNoTooltipRegnal]',
+    CHECKPOINT_EPOCH_TOKEN,
+    "[GetPlayer.MakeScope.Var('votc_timeline_node_a').GetValue|0]",
+    "[GetPlayer.MakeScope.Var('votc_timeline_node_b').GetValue|0]",
+    "[GetPlayer.MakeScope.Var('votc_timeline_parent_a').GetValue|0]",
+    "[GetPlayer.MakeScope.Var('votc_timeline_parent_b').GetValue|0]",
+    "[GetPlayer.MakeScope.Var('votc_checkpoint_token').GetValue|0]",
+    "[GetPlayer.MakeScope.Var('votc_checkpoint_pending_token').GetValue|0]"
 ];
-
-function expectInitProducerDateExtra(dateExtra: string[]): void {
-    expect(dateExtra.length).toBe(INIT_DATE_EXTRA_FIELD_COUNT);
-    // Date extras are: currentDateTotalDays, year, month, day, display.
-    // They are runtime-interpolated tokens, not literals, so we only assert
-    // count and that the last (display) field is a string token.
-    expect(dateExtra.every(f => typeof f === 'string' && f.length > 0)).toBe(true);
-}
+const SAVE_SNAPSHOT_PROTOCOL_PLACEHOLDER_TOKEN = "[GetPlayer.MakeScope.Var('votc_save_snapshot_protocol').GetValue|0]";
+const INIT_TAIL_START_INDEX = INIT_CORE_FIELD_COUNT;
+const INIT_SAVE_SNAPSHOT_PLACEHOLDER_INDEX = INIT_TAIL_START_INDEX + PROTOCOL_TAIL_FIELD_COUNT;
 
 describe('init producer tail consistency', () => {
     for (const file of INIT_PRODUCER_FILES) {
@@ -110,12 +119,21 @@ describe('init producer tail consistency', () => {
             expect(lines.length).toBeGreaterThan(0);
             for (const line of lines) {
                 const fields = splitFields(line).slice(2);
-                // Every production init producer carries the common timeline
-                // tail, date extras and the debug-only save-snapshot protocol.
-                expect(fields.length).toBe(EXPECTED_INIT_FIELD_COUNT_WITH_SAVE_SNAPSHOT);
-                expectInitProducerTail(fields.slice(INIT_CORE_FIELD_COUNT, INIT_DATE_EXTRA_START_INDEX));
-                expectInitProducerDateExtra(fields.slice(INIT_DATE_EXTRA_START_INDEX, INIT_SAVE_SNAPSHOT_EXTRA_START_INDEX));
-                expect(fields.slice(INIT_SAVE_SNAPSHOT_EXTRA_START_INDEX)).toEqual(EXPECTED_SAVE_SNAPSHOT_TOKENS);
+                // Every production init producer carries exactly the core
+                // segment, the protocol tail and the save-snapshot placeholder.
+                expect(fields.length).toBe(EXPECTED_INIT_FIELD_COUNT);
+                // Core segment: identity/date/scene/location fields followed
+                // by the checkpoint epoch and timeline state variables.
+                expect(fields.slice(0, INIT_CORE_FIELD_COUNT)).toEqual(EXPECTED_INIT_CORE_TOKENS);
+                expectInitProducerTail(fields.slice(INIT_TAIL_START_INDEX, INIT_SAVE_SNAPSHOT_PLACEHOLDER_INDEX));
+                expect(fields[INIT_SAVE_SNAPSHOT_PLACEHOLDER_INDEX]).toBe(SAVE_SNAPSHOT_PROTOCOL_PLACEHOLDER_TOKEN);
+                // Negative contracts: no date-extra block (mod1's
+                // GetDateAsTotalDays segment between controller and epoch does
+                // not exist here — the short date at index 4 is the only date
+                // field) and no background_texture tail segment (that travels
+                // on the separate VOTC:BACKGROUND line instead).
+                expect(line).not.toContain('GetDateAsTotalDays');
+                expect(line).not.toContain('background');
             }
         });
 
@@ -138,105 +156,30 @@ describe('init producer tail consistency', () => {
             const content = readModFile(file);
             const lines = findDebugLogLines(content, 'VOTC:IN/;/init/;/');
             for (const line of lines) {
-                tails.push(splitFields(line).slice(2).slice(INIT_CORE_FIELD_COUNT, INIT_DATE_EXTRA_START_INDEX).join('/;/'));
+                tails.push(splitFields(line).slice(2).slice(INIT_TAIL_START_INDEX, INIT_SAVE_SNAPSHOT_PLACEHOLDER_INDEX).join('/;/'));
             }
         }
         expect(new Set(tails).size).toBe(1);
     });
-});
 
-describe('debug-only automatic save snapshot wiring', () => {
-    const entryFiles: Array<[string, number]> = [
-        ['events/talk_events/talk_events.txt', 1],
-        ['events/mcc_events.txt', 1],
-        ['events/mcc_decision_events.txt', 2],
-        ['events/meet_events.txt', 1],
-        ['events/votc_sidebar_conversation_events.txt', 1],
-        ['events/votc_military_council_events.txt', 1]
-    ];
-
-    for (const [file, expectedCount] of entryFiles) {
-        it(`prepares the snapshot protocol before clipboard transfer in ${file}`, () => {
-            const content = readModFile(file);
-            expect(content.match(/votc_prepare_save_snapshot_effect\s*=\s*yes/g)).toHaveLength(expectedCount);
-        });
-    }
-
-for (const file of [
-        'gui/event_window_widgets/event_window_widget_talk.gui',
-        'gui/event_window_widgets/event_window_widget_meet.gui',
-        'gui/event_window_widgets/votc_sidebar_conversation_talk_widget.gui'
-    ]) {
-        it(`copies conversation data and retains votc_context in ${file}`, () => {
-            const content = readModFile(file);
-            // The mod (codex/fix-conversation-overlay-save-race) bakes the
-            // save + overlay creation into one ordered console batch to avoid
-            // the save-race, so there is no GetScriptedGui('votc_save_snapshot_gui').
-            expect(content).toContain('[EventWindowData.CopyToClipboard]');
-            expect(content).toContain("[ExecuteConsoleCommandsForced('save votc_context;");
-            expect(content).toContain('gui.createwidget');
-            // The clipboard transfer must still precede the save command so the
-            // snapshot written by `save votc_context` carries the conversation data.
-            expect(content.indexOf('[EventWindowData.CopyToClipboard]'))
-                .toBeLessThan(content.indexOf('save votc_context'));
-        });
-    }
-
-    it('advertises parser protocol 1 only in debug mode and 0/0/0 otherwise', () => {
-        const content = readModFile('common/scripted_effects/votc_save_snapshot_effects.txt');
-        expect(content).toContain('limit = { debug_only = yes }');
-        expect(content).toContain('set_variable = { name = votc_save_snapshot_protocol value = 1 }');
-        expect(content).toContain('set_variable = { name = votc_save_snapshot_protocol value = 0 }');
-        expect(content).toContain('set_variable = { name = votc_save_snapshot_sequence value = 0 }');
-        expect(content).toContain('set_variable = { name = votc_save_snapshot_slot value = 0 }');
-        expect(content).toContain('set_variable = { name = votc_save_snapshot_active value = 1 }');
+    it('never writes the save snapshot protocol variable anywhere in the mod', () => {
+        // The placeholder at index 23 must keep parsing as 0: nothing in
+        // mod2 ce may set votc_save_snapshot_* state until that feature is
+        // actually ported from mod1.
+        const effectsRoot = path.join(MOD_ROOT, 'common/scripted_effects');
+        const files = fs.readdirSync(effectsRoot, { encoding: 'utf-8' }).filter(f => f.endsWith('.txt'));
+        const writers: string[] = [];
+        for (const file of files) {
+            const text = fs.readFileSync(path.join(effectsRoot, file), 'utf-8');
+            if (/set_(global_)?variable\s*=\s*\{\s*name\s*=\s*votc_save_snapshot_/.test(text)) {
+                writers.push(file);
+            }
+        }
+        expect(writers).toEqual([]);
     });
 });
 
-describe('manager clipboard en/zh parity and v2 tail', () => {
-    const enFile = 'localization/english/hmd_log_character_l_english.yml';
-    const zhFile = 'localization/simp_chinese/hmd_bookmark_l_simp_chinese.yml';
-
-    function managerLines(content: string): string[] {
-        const values: string[] = [];
-        for (const line of content.split(/\r?\n/)) {
-            if (line.includes('VOTC:SUMMARY_MANAGER') || line.includes('VOTC:CONVERSATION_HISTORY')) {
-                const m = line.match(/:\d+\s+"(.*)"/);
-                if (m) values.push(m[1]);
-            }
-        }
-        return values;
-    }
-
-    it('has the same number of manager payloads in english and simplified chinese', () => {
-        const en = managerLines(readModFile(enFile));
-        const zh = managerLines(readModFile(zhFile));
-        expect(en.length).toBe(zh.length);
-        expect(en.length).toBe(2);
-    });
-
-    it('carries 9 old fields plus 8 v2 tail fields in both languages', () => {
-        for (const file of [enFile, zhFile]) {
-            for (const line of managerLines(readModFile(file))) {
-                const fields = splitFields(line).slice(1);
-                expect(fields.length).toBe(9 + PROTOCOL_TAIL_FIELD_COUNT);
-                expectInitProducerTail(fields.slice(9));
-            }
-        }
-    });
-
-    it('uses the same v2 tail tokens for both manager payloads in both languages', () => {
-        const tails: string[] = [];
-        for (const file of [enFile, zhFile]) {
-            for (const line of managerLines(readModFile(file))) {
-                tails.push(splitFields(line).slice(1).slice(9).join('/;/'));
-            }
-        }
-        expect(new Set(tails).size).toBe(1);
-    });
-});
-
-describe('battle/incoming/letter/bookmark schema and identity', () => {
+describe('VOTC:TIMELINE snapshot/bump schema identity', () => {
     it('emits VOTC:TIMELINE snapshot lines with protocolSchema=2 and campaignSchema=1', () => {
         const files = [
             'common/scripted_effects/votc_battle_report_effects.txt',
@@ -262,145 +205,6 @@ describe('battle/incoming/letter/bookmark schema and identity', () => {
             expect(fields[2]).toBe(String(TIMELINE_PROTOCOL_SCHEMA));
             expect(fields[3]).toBe(String(TIMELINE_CAMPAIGN_SCHEMA));
         }
-    });
-
-    it('emits VOTC:LETTER snapshot_begin lines with slot and delivery identity', () => {
-        const content = readModFile('events/message_events.txt');
-        const lines = findDebugLogLines(content, 'VOTC:LETTER/;/snapshot_begin/;/');
-        expect(lines.length).toBe(9);
-        for (const line of lines) {
-            const fields = splitFields(line);
-            expect(fields.length).toBeGreaterThanOrEqual(4);
-            expect(fields[1]).toBe('snapshot_begin');
-            expect(fields[2]).toMatch(/^letter_\d$/);
-            expect(fields[3]).toContain('votc_letter_');
-            expect(fields[3]).toContain('_delivery_id');
-        }
-    });
-
-    it('emits a VOTC:BOOKMARK campaign identity line in english and simplified chinese', () => {
-        for (const file of [
-            'localization/english/hmd_log_character_l_english.yml',
-            'localization/simp_chinese/hmd_bookmark_l_simp_chinese.yml'
-        ]) {
-            const content = readModFile(file);
-            const lines = findYmlValues(content, /hmd_event\.9003\.desc/);
-            expect(lines.length).toBe(1);
-            const fields = splitFields(lines[0]);
-            expect(fields[0]).toBe('VOTC:BOOKMARK');
-            expect(fields[1]).toBe('campaign');
-            // After VOTC:BOOKMARK/campaign comes playerId, epoch, then the
-            // 8-field v2 tail: protocolSchema=2, campaignSchema=1, four
-            // campaign id globals, bootstrap kind, player timeline schema.
-            const tail = fields.slice(4);
-            expect(tail.slice(0, 2)).toEqual(EXPECTED_TAIL_LITERAL_PREFIX);
-            expect(tail.slice(2, 6)).toEqual(CAMPAIGN_ID_GLOBAL_TOKENS);
-            expect(tail[6]).toBe(CAMPAIGN_BOOTSTRAP_TOKEN);
-            expect(tail[7]).toBe(PLAYER_TIMELINE_SCHEMA_TOKEN);
-        }
-    });
-
-    it('emits VOTC:INCOMING_LETTER bridge lines with real campaign identity globals', () => {
-        for (const file of [
-            'localization/english/clipboard_codes_l_english.yml',
-            'localization/simp_chinese/clipboard_codes_l_simp_chinese.yml'
-        ]) {
-            const content = readModFile(file);
-            const lines = findYmlValues(content, /votc_incoming_letter_bridge_/);
-            expect(lines.length).toBe(8);
-            for (const line of lines) {
-                const fields = splitFields(line);
-                expect(fields.length).toBeGreaterThanOrEqual(7);
-                expect(fields[0]).toBe('VOTC:INCOMING_LETTER');
-                expect(fields[1]).toMatch(/^incoming_letter_\d$/);
-                expect(fields[4]).toBe('[GetPlayer.GetID]');
-                expect(fields[5]).toBe(String(TIMELINE_PROTOCOL_SCHEMA));
-                expect(fields[6]).toBe(String(TIMELINE_CAMPAIGN_SCHEMA));
-                const tail = fields.slice(7);
-                expect(tail.slice(0, 4)).toEqual(CAMPAIGN_ID_GLOBAL_TOKENS);
-                expect(tail[4]).toBe(CAMPAIGN_BOOTSTRAP_TOKEN);
-                expect(tail[5]).toBe(PLAYER_TIMELINE_SCHEMA_TOKEN);
-            }
-        }
-    });
-
-    it('emits a VOTC:BATTLE_REPORT campaign line with real campaign identity', () => {
-        const content = readModFile('common/scripted_effects/votc_battle_report_effects.txt');
-        const lines = findDebugLogLines(content, 'VOTC:BATTLE_REPORT/;/campaign/;/');
-        expect(lines.length).toBeGreaterThan(0);
-        for (const line of lines) {
-            const fields = splitFields(line);
-            expect(fields[0]).toBe('VOTC:BATTLE_REPORT');
-            expect(fields[1]).toBe('campaign');
-            // playerId, protocolSchema=2, campaignSchema=1, then four id globals.
-            expect(fields[3]).toBe(String(TIMELINE_PROTOCOL_SCHEMA));
-            expect(fields[4]).toBe(String(TIMELINE_CAMPAIGN_SCHEMA));
-            expect(fields.slice(5, 9)).toEqual(CAMPAIGN_ID_GLOBAL_TOKENS);
-        }
-    });
-
-    it('§10.1 emits VOTC:BATTLE_REPORT snapshot_begin/snapshot_end/delivery_id lines with slot + delivery id', () => {
-        const content = readModFile('common/scripted_effects/votc_battle_report_effects.txt');
-        // snapshot_begin: VOTC:BATTLE_REPORT/;/snapshot_begin/;/slot/;/deliveryId
-        const beginLines = findDebugLogLines(content, 'VOTC:BATTLE_REPORT/;/snapshot_begin/;/');
-        expect(beginLines.length).toBeGreaterThan(0);
-        for (const line of beginLines) {
-            const fields = splitFields(line);
-            expect(fields[0]).toBe('VOTC:BATTLE_REPORT');
-            expect(fields[1]).toBe('snapshot_begin');
-            // fields[2] is the slot flag token, fields[3] is the delivery id var
-            expect(fields[2]).toContain('votc_battle_report_num');
-            expect(fields[3]).toContain('votc_battle_report_active_delivery_id');
-        }
-        // snapshot_end: same shape
-        const endLines = findDebugLogLines(content, 'VOTC:BATTLE_REPORT/;/snapshot_end/;/');
-        expect(endLines.length).toBeGreaterThan(0);
-        for (const line of endLines) {
-            const fields = splitFields(line);
-            expect(fields[1]).toBe('snapshot_end');
-            expect(fields[3]).toContain('votc_battle_report_active_delivery_id');
-        }
-        // delivery_id: VOTC:BATTLE_REPORT/;/delivery_id/;/slot/;/id
-        const deliveryIdLines = findDebugLogLines(content, 'VOTC:BATTLE_REPORT/;/delivery_id/;/');
-        expect(deliveryIdLines.length).toBeGreaterThan(0);
-        for (const line of deliveryIdLines) {
-            const fields = splitFields(line);
-            expect(fields[0]).toBe('VOTC:BATTLE_REPORT');
-            expect(fields[1]).toBe('delivery_id');
-            expect(fields[2]).toContain('votc_battle_report_num');
-            expect(fields[3]).toContain('votc_battle_report_active_delivery_id');
-        }
-    });
-
-    it('§10.1 defines votc_generate_battle_delivery_id_effect and appends 28 random bits', () => {
-        const content = readModFile('common/scripted_effects/votc_checkpoint_effects.txt');
-        expect(content).toContain('votc_generate_battle_delivery_id_effect = {');
-        expect(content).toContain('votc_append_battle_delivery_id_bit_effect = {');
-        // Count the append calls: 28 bits like the pending token generator.
-        const appendCount = (content.match(/votc_append_battle_delivery_id_bit_effect = (?:\{\}|yes)/g) || []).length;
-        expect(appendCount).toBe(28);
-    });
-
-    it('§10.1 battle_report_events generates a per-slot delivery id and cleans it up', () => {
-        const content = readModFile('events/battle_report_events.txt');
-        // Each of the 15 slots should generate the delivery id and store it
-        // in both the per-slot variable and the active variable.
-        const generateCount = (content.match(/votc_generate_battle_delivery_id_effect = (?:\{\}|yes)/g) || []).length;
-        expect(generateCount).toBe(15);
-        // Each slot must persist its delivery id as a global. Console run
-        // scripts cannot reliably read a character-local id through the
-        // transient saved battle scope.
-        const perSlotSetCount = (content.match(/set_global_variable\s*=\s*\{\s*name = votc_battle_report_\d+_delivery_id\s*\n\s*value = var:votc_battle_report_delivery_id/g) || []).length;
-        expect(perSlotSetCount).toBe(15);
-        // Each slot should set the active delivery id variable
-        const activeSetCount = (content.match(/name = votc_battle_report_active_delivery_id\s*\n\s*value = var:votc_battle_report_delivery_id/g) || []).length;
-        expect(activeSetCount).toBe(15);
-        // Each slot cleanup should remove both the active and the per-slot delivery id
-        const activeCleanupCount = (content.match(/remove_variable \?= votc_battle_report_active_delivery_id/g) || []).length;
-        expect(activeCleanupCount).toBe(15);
-        // The 30-day failsafe also clears the matching global delivery id.
-        const perSlotCleanupCount = (content.match(/remove_global_variable \?= votc_battle_report_\d+_delivery_id/g) || []).length;
-        expect(perSlotCleanupCount).toBe(15);
     });
 });
 
@@ -455,22 +259,6 @@ describe('campaign id generation effects', () => {
             : corruptBranch;
         expect(corruptBranchText).not.toContain('votc_generate_campaign_id_effect');
         expect(corruptBranchText).not.toContain('set_global_variable = { name = votc_campaign_schema');
-    });
-});
-
-describe('chronicle pulse registration', () => {
-    it('registers pulse events without overriding the shared on_action trigger/effect', () => {
-        const onAction = readModFile('common/on_action/votc_chronicle_on_actions.txt');
-        expect(onAction).toContain('events = {');
-        expect(onAction).toContain('votc_chronicle_event.9001');
-        expect(onAction).toContain('votc_chronicle_event.9002');
-        expect(onAction).not.toMatch(/^\s*trigger\s*=/m);
-        expect(onAction).not.toMatch(/^\s*effect\s*=/m);
-
-        const events = readModFile('events/votc_chronicle_events.txt');
-        expect(events).toMatch(/votc_chronicle_event\.9001[\s\S]*?trigger\s*=\s*\{[\s\S]*?is_ai\s*=\s*no/);
-        expect(events).toContain('votc_chronicle_quarterly_tick_effect = yes');
-        expect(events).toContain('votc_chronicle_yearly_tick_effect = yes');
     });
 });
 
@@ -640,10 +428,6 @@ describe('new localization keys exist in both english and simplified chinese', (
         {
             en: 'localization/english/log_character_l_english.yml',
             zh: 'localization/simp_chinese/log_character_l_simp_chinese.yml'
-        },
-        {
-            en: 'localization/english/hmd_log_character_l_english.yml',
-            zh: 'localization/simp_chinese/hmd_bookmark_l_simp_chinese.yml'
         },
         {
             en: 'localization/english/clipboard_codes_l_english.yml',
