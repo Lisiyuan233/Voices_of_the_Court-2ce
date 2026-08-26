@@ -22,12 +22,26 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import {Message, MessageChunk, ErrorMessage, Summary, Action, ActionResponse, PendingAction} from '../ts/conversation_interfaces.js';
 import { parseGameDate } from '../../shared/dateUtils.js';
-import { getConversationHistoryFiles } from '../conversationHistory.js';
+import { listPromptTranscriptFiles } from '../conversationHistory.js';
 import { archiveFutureSummaryFilesForPlayer, filterSummariesForCheckpoint } from '../summaryManager.js';
 import { getSimilarity } from '../../shared/stringUtils.js';
 import { parseVariables } from '../parseVariables.js';
 import { ActionEffectWriter } from './ActionEffectWriter.js';
-import type { CreateChildNodeResult } from '../timelineManager.js';
+import {
+    TimelineParentNotFoundError,
+    TimelineRegistryCorruptError,
+    type CreateChildNodeResult
+} from '../timelineManager.js';
+import { UnsupportedTimelineSchemaError } from '../../shared/gameData/timelineProtocol.js';
+import { requireCampaignIdentity, CampaignIdentityUnavailableError } from '../campaignIdentityResolver.js';
+import { reportCampaignIdentityUnavailable, reportCorruptTimelineRegistry, reportTimelineParentNotFound, reportUnsupportedTimelineSchema } from '../timelineRegistryRecovery.js';
+import { runConversationTimelineTransition } from '../timelineBusinessWire.js';
+
+// Fallback close effect used when the timeline transition fails: closes the
+// CK3 conversation window WITHOUT advancing checkpoint state. Mirrors the
+// 1.x CLOSE_CONVERSATION_ONLY_EFFECT ('trigger_event = talk_event.9002'),
+// adapted to the 2CE mod's close event id.
+const CLOSE_CONVERSATION_ONLY_EFFECT = 'trigger_event = mcc_event_v2.9002';
 
 function getTranslations(lang: string): any {
     const localePath = path.join(app.getAppPath(), 'public', 'locales', `${lang}.json`);
@@ -81,6 +95,16 @@ export class Conversation{
     abortController: AbortController | null;
     isGeneratingScene: boolean;
     pendingPlayerRequest: boolean;
+
+    // §4.1: immutable campaign/player identity captured at conversation start.
+    // Undefined when the mod snapshot carries no v2 campaign id (legacy Mod);
+    // the conversation window still opens for display, but summarize() fails
+    // closed instead of writing timeline records.
+    campaignIdentity: import('../../shared/gameData/CampaignIdentity.js').CampaignPlayerIdentity | undefined;
+
+    // §9.3 P5.4 fix C1: requestKey UUID reused across retries of the same
+    // close attempt; cleared when the close reaches terminal state.
+    private currentCloseRequestKey: string | undefined;
 
     constructor(gameData: GameData, config: Config, chatWindow: ChatWindow, userDataPath: string){
         console.log('Conversation initialized.');
@@ -153,6 +177,25 @@ export class Conversation{
         const playerDiariesPath = path.join(diariesBasePath, this.gameData.playerID.toString());
         if (!fs.existsSync(playerDiariesPath)) {
             fs.mkdirSync(playerDiariesPath, { recursive: true });
+        }
+
+        // §4.1, §9: capture immutable identity at conversation start. If the
+        // snapshot has a v2 campaign id, timeline writes at close time are
+        // possible. If not (legacy Mod), keep the player-only display paths;
+        // summarize() will fail closed if a timeline write is attempted.
+        try {
+            this.campaignIdentity = requireCampaignIdentity({
+                playerID: this.gameData.playerID,
+                timelineSnapshotResult: this.gameData.timelineSnapshotResult
+            });
+        } catch (error) {
+            if (error instanceof CampaignIdentityUnavailableError) {
+                // Report but do not crash the conversation window; the close
+                // path falls back to the close-only effect.
+                reportCampaignIdentityUnavailable(error);
+            } else {
+                throw error;
+            }
         }
 
         // Create/Update character map for the current player in the diary folder
@@ -292,7 +335,7 @@ export class Conversation{
         }
 
         const allCharacterIds = Array.from(this.gameData.characters.keys());
-        const historyFiles = await getConversationHistoryFiles(this.gameData.playerID.toString(), allCharacterIds, this.config.maxHistoricalConversations, this.gameData.votcCheckpointEpoch);
+        const historyFiles = await listPromptTranscriptFiles(this.gameData.playerID.toString(), allCharacterIds, this.config.maxHistoricalConversations, this.gameData.votcCheckpointEpoch);
 
         const files = historyFiles
             .map(file => ({
@@ -1619,6 +1662,29 @@ ${character.fullName}的发言：`
             }
     }
 
+    /**
+     * §9.3 P5.4 fix C1: returns the requestKey UUID for the current
+     * close-request lifecycle. Generates a UUID on the first call and reuses
+     * it on subsequent calls (retries within the same close) so journal rule 1
+     * "same-close reuse" can fire in production. Cleared by
+     * clearCloseRequestKey() when the attempt reaches terminal state.
+     */
+    private getOrCreateCloseRequestKey(): string {
+        if (!this.currentCloseRequestKey) {
+            this.currentCloseRequestKey = `conv:${randomUUID()}`;
+        }
+        return this.currentCloseRequestKey;
+    }
+
+    /**
+     * §9.3 P5.4 fix C1: clears the stored close-request requestKey. Called
+     * when the current close-request's attempt reaches terminal state so the
+     * next close generates a fresh UUID. Idempotent (no-op if no key was set).
+     */
+    private clearCloseRequestKey(): void {
+        this.currentCloseRequestKey = undefined;
+    }
+
     private buildCloseConversationEffect(checkpointEpoch: number, timeline?: CreateChildNodeResult): string {
         let timelineLines = '';
         let nodeLogSegment = '';
@@ -1657,13 +1723,74 @@ ${timelineLines}
         this.isOpen = false;
         const nextCheckpointEpoch = this.gameData.votcCheckpointEpoch + 1;
         this.cancelGeneration(); // Cancel any ongoing generation.
-        // Write a trigger event to the game (e.g., trigger conversation end event)
-        // TODO(P6 Task5): wire JournalApi commit result here (BusinessWire bootstrap)
-        this.runFileManager.write(this.buildCloseConversationEffect(nextCheckpointEpoch, undefined));
-        setTimeout(() => {
-            this.runFileManager.clear();  // Clear the event file after a delay (to ensure the game has read it)
-            console.log('Run file cleared after conversation end event.');
-        }, 500);
+
+        // §9.3 P5.4 fix C1: wrap the close-request lifecycle in try/finally so
+        // the stored requestKey UUID is cleared regardless of outcome (success,
+        // fail-closed identity error, or unexpected throw). Idempotent.
+        try {
+            // §4.1: capture the campaign identity captured at conversation
+            // start; §9: fail closed when it is missing (legacy Mod) - do NOT
+            // fall back to a player-only timeline write.
+            let timeline: CreateChildNodeResult | undefined;
+            try {
+                if (!this.campaignIdentity) {
+                    throw new CampaignIdentityUnavailableError(
+                        'legacy-mod',
+                        'Campaign identity unavailable: the mod does not emit a v2 campaign id. Update the mod to a matching version.'
+                    );
+                }
+                const requestKey = this.getOrCreateCloseRequestKey();
+                const eventSignature = `conv:${this.gameData.playerID}_${this.gameData.aiID}_${this.gameData.date}_${nextCheckpointEpoch}`;
+                const transition = await runConversationTimelineTransition({
+                    userDataDir: app.getPath('userData'),
+                    gameData: this.gameData as any,
+                    identity: this.campaignIdentity,
+                    requestKey,
+                    eventSignature,
+                    targetEpoch: nextCheckpointEpoch,
+                    scopeVar: 'talk_first_scope'
+                });
+                // Adapt SourceTransitionResult -> CreateChildNodeResult so the
+                // existing buildCloseConversationEffect + downstream callers
+                // continue to work without churn.
+                timeline = {
+                    nodeId: transition.targetNodeId,
+                    parentId: transition.context.timelineParentId ?? null,
+                    script: transition.script,
+                    context: transition.context,
+                    createdNewRoot: false
+                };
+                console.log(`Timeline node created: ${timeline.nodeId} (parent: ${timeline.parentId ?? 'null'}, attempt: ${transition.attemptId}, reused: ${transition.reused})`);
+            } catch (error) {
+                if (error instanceof CampaignIdentityUnavailableError) {
+                    reportCampaignIdentityUnavailable(error);
+                } else if (error instanceof TimelineRegistryCorruptError) {
+                    reportCorruptTimelineRegistry(error);
+                } else if (error instanceof TimelineParentNotFoundError) {
+                    reportTimelineParentNotFound(error);
+                } else if (error instanceof UnsupportedTimelineSchemaError) {
+                    reportUnsupportedTimelineSchema(error.schema);
+                }
+                // Closing the CK3 event window is a UI safety operation and
+                // must not depend on timeline persistence succeeding. Keep the
+                // failure visible in the log, then fall back to a close-only
+                // run script that does not advance checkpoint state.
+                console.error('[Conversation] Timeline transition failed while closing; sending the CK3 close event without a checkpoint update:', error);
+            }
+
+            // Write a trigger event to the game (e.g., trigger conversation end event)
+            this.runFileManager.write(
+                timeline
+                    ? this.buildCloseConversationEffect(nextCheckpointEpoch, timeline)
+                    : CLOSE_CONVERSATION_ONLY_EFFECT
+            );
+            setTimeout(() => {
+                this.runFileManager.clear();  // Clear the event file after a delay (to ensure the game has read it)
+                console.log('Run file cleared after conversation end event.');
+            }, 500);
+        } finally {
+            this.clearCloseRequestKey();
+        }
 
         // Generate and save diary entries for each character
         for (const character of this.gameData.characters.values()) {

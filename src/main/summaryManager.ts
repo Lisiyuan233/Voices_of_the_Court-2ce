@@ -1,6 +1,10 @@
 import fs from 'fs';
 import path from 'path';
+import { app } from 'electron';
 import { Summary } from './ts/conversation_interfaces';
+import { TimelineRegistry, isRecordVisibleForContext } from './timelineManager.js';
+import { conversationSummariesDir as campaignConversationSummariesDir } from './campaignDataPaths.js';
+import type { CampaignPlayerIdentity } from '../shared/gameData/CampaignIdentity.js';
 
 function getSummaryCheckpointEpoch(summary: any): number | undefined {
     const rawEpoch = summary?.votcCheckpointEpoch;
@@ -228,11 +232,28 @@ export async function getPlayerId(userDataPath: string): Promise<{playerId: stri
  * Reads all summary files for a given player.
  * @param userDataPath The path to the user data directory.
  * @param playerId The ID of the player whose summaries to read.
+ * @param checkpointEpoch Optional checkpoint filter (legacy epoch-based).
+ * @param registry Optional timeline registry for branch visibility of
+ *                 node-tagged records (1.x readSummaryFile parity).
+ * @param currentNodeId Current timeline node id used with `registry`.
+ * @param identity When present, reads the campaign-scoped summary directory
+ *                 instead of the legacy player-only one.
  * @returns A promise that resolves to an array of all summaries.
  */
-export async function readSummaryFile(userDataPath: string, playerId: string, checkpointEpoch?: number): Promise<Summary[]> {
+export async function readSummaryFile(
+    userDataPath: string,
+    playerId: string,
+    checkpointEpoch?: number,
+    registry?: TimelineRegistry,
+    currentNodeId?: string,
+    identity?: CampaignPlayerIdentity
+): Promise<Summary[]> {
     try {
-        const summaryDir = path.join(userDataPath, 'conversation_summaries', playerId);
+        // Campaign-scoped layout is rooted at the userData dir; the legacy
+        // layout hangs off the votc_data dir passed in by callers.
+        const summaryDir = identity
+            ? campaignConversationSummariesDir(app.getPath('userData'), identity)
+            : path.join(userDataPath, 'conversation_summaries', playerId);
         
         // Ensure directory exists
         if (!fs.existsSync(summaryDir)) {
@@ -261,10 +282,15 @@ export async function readSummaryFile(userDataPath: string, playerId: string, ch
             }
         }
         
-        // Apply checkpoint filter
-        const visibleSummaries = checkpointEpoch === undefined
+        // First apply the legacy epoch filter (preserves all timeline-tagged
+        // records regardless of epoch), then apply graph-based visibility for
+        // timeline records so other-branch summaries are hidden.
+        const epochFiltered = checkpointEpoch === undefined
             ? allSummaries
             : filterSummariesForCheckpoint(allSummaries, checkpointEpoch);
+        const visibleSummaries = epochFiltered.filter((summary) =>
+            isRecordVisibleForContext(registry, currentNodeId, summary, checkpointEpoch)
+        );
 
         // Sort by date
         visibleSummaries.sort((a, b) => {
