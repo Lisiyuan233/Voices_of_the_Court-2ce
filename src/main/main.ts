@@ -980,8 +980,11 @@ clipboardListener.on('VOTC:IN', async () =>{
 
         console.log("New conversation started!");
         // Under protocol v2 the init line no longer carries totalDays (index 8
-        // is the checkpoint epoch); gameDate is populated by the VOTC:DATE
-        // extra block instead. Fall back to the legacy field for old logs.
+        // is the checkpoint epoch). The authoritative date source is gameDate,
+        // populated from the VOTC:DATE extra block; GameData's totalDays field
+        // is not assigned by the constructor - main.ts only fills it in inside
+        // the LETTER/BATTLE_REPORT flows (gameData.totalDays = currentTotalDays)
+        // - so the ?? totalDays fallback below cannot fire at chat-start.
         if (gameData.gameDate?.totalDays ?? gameData.totalDays) {
             updateCurrentDate(gameData.gameDate?.totalDays ?? gameData.totalDays);
         }
@@ -1114,6 +1117,9 @@ clipboardListener.on('VOTC:BOOKMARK', async () => {
     }
 })
 
+// Payload parsing is already in place (ClipboardListener emits the parsed
+// string[] payload for this command); wiring a dedicated summary-manager
+// window flow is deferred to P7.
 clipboardListener.on('VOTC:SUMMARY_MANAGER', async () => {
     console.log('ClipboardListener: VOTC:SUMMARY_MANAGER event detected.');
     try {
