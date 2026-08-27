@@ -19,6 +19,14 @@ export function splitSummariesForCheckpoint<T extends { votcCheckpointEpoch?: nu
     const visibleSummaries: T[] = [];
     const futureSummaries: T[] = [];
     summaries.forEach((summary) => {
+        // Records anchored to a timeline node are graph-visible regardless of
+        // their epoch stamp (1.x summaryManager isTimelineSummary semantics).
+        // The incoming-letter writer stamps votcCheckpointEpoch = post-bump,
+        // which is always > the pre-bump epoch of the read that follows it.
+        if (getSummaryTimelineNodeId(summary)) {
+            visibleSummaries.push(summary);
+            return;
+        }
         const summaryEpoch = getSummaryCheckpointEpoch(summary);
         if (summaryEpoch !== undefined && summaryEpoch > checkpointEpoch) {
             futureSummaries.push(summary);
@@ -27,6 +35,11 @@ export function splitSummariesForCheckpoint<T extends { votcCheckpointEpoch?: nu
         }
     });
     return { visibleSummaries, futureSummaries };
+}
+
+function getSummaryTimelineNodeId(summary: any): string | undefined {
+    const nodeId = summary?.votcTimelineNodeId;
+    return typeof nodeId === 'string' && nodeId !== '' ? nodeId : undefined;
 }
 
 export function filterSummariesForCheckpoint<T extends { votcCheckpointEpoch?: number }>(summaries: T[], checkpointEpoch: number): T[] {
@@ -285,10 +298,10 @@ export async function readSummaryFile(
         // First apply the legacy epoch filter (preserves all timeline-tagged
         // records regardless of epoch), then apply graph-based visibility for
         // timeline records so other-branch summaries are hidden.
-        // NOTE: no summary writer currently stamps votcTimelineNodeId, so the
-        // node-tagged branch of isRecordVisibleForContext is dormant (and
-        // fail-closed when registry/currentNodeId are absent). When P7
-        // introduces node stamping for summaries, revisit this filter.
+        // NOTE: the incoming-letter generator (P1) now stamps both
+        // votcTimelineNodeId and a post-bump votcCheckpointEpoch; the split
+        // helpers keep node-tagged records visible (1.x isTimelineSummary
+        // semantics), so the branch below is active for those records.
         const epochFiltered = checkpointEpoch === undefined
             ? allSummaries
             : filterSummariesForCheckpoint(allSummaries, checkpointEpoch);

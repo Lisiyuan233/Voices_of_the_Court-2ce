@@ -13,11 +13,7 @@ import { archiveFutureLetterHistoryForPlayer, saveIncomingLetterHistory } from '
 import { buildIncomingLetterHistoryRecord } from './letterHistoryRecord.js';
 import { createMemoryString, getEffectivePrompts } from '../conversation/promptBuilder';
 import {
-    TimelineRegistry,
-    FsTimelinePersistence,
     TimelineRegistryCorruptError,
-    buildContextFromGameData,
-    resolveTimelineContext,
     type CreateChildNodeResult,
     type GameDataLike
 } from '../timelineManager.js';
@@ -256,30 +252,13 @@ export class IncomingLetterGenerator {
         );
     }
 
-    private getSummaryTimeline(gameData: GameData): { registry: TimelineRegistry | undefined; currentNodeId: string | undefined } {
-        // §4.1: when the game data carries a v2 campaign id, load the registry
-        // from the campaign-scoped path for display filtering. For legacy
-        // snapshots, fall back to player-only (display only; no writes).
-        const persistence = new FsTimelinePersistence(app.getPath('userData'));
-        let registry: TimelineRegistry | undefined;
-        try {
-            const identity = requireCampaignIdentity({
-                playerID: gameData.playerID,
-                timelineSnapshotResult: gameData.timelineSnapshotResult
-            });
-            const result = persistence.loadStoreWithIdentity(identity);
-            registry = result.status === 'found' ? result.store : undefined;
-        } catch {
-            // Legacy snapshot: fall back to player-only display load.
-            registry = persistence.loadRegistry(String(gameData.playerID)) ?? undefined;
-        }
-        const context = registry
-            ? resolveTimelineContext(registry, buildContextFromGameData(gameData))
-            : buildContextFromGameData(gameData);
-        return {
-            registry,
-            currentNodeId: context.timelineNodeId
-        };
+    // 2CE summaryManager/getEffectivePrompts convention: callers pass the
+    // <userData>/votc_data root (see main.ts and LetterReplyGenerator), not
+    // the bare userData dir. 1.x read summaries from the campaign namespace;
+    // 2CE's saveSummaryFile has no identity branch yet, so reads stay in the
+    // legacy namespace the rest of the 2CE conversation/letter flow shares.
+    private getVotcDataRoot(): string {
+        return path.join(app.getPath('userData'), 'votc_data');
     }
 
     public async generateIncomingLetter(
@@ -343,6 +322,14 @@ export class IncomingLetterGenerator {
         latestSignatureBySlot.set(slotId, signature);
 
         try {
+            // Write the identity-independent gated fallback FIRST so a letter
+            // degrades to fallback text even when the timeline transition
+            // fails (e.g. campaign id not yet bootstrapped); the final run
+            // file overwrites it on success. Audit fix: previously an
+            // identity failure returned before any run file existed and the
+            // delivery stalled until the slot cleanup.
+            this.writeFallbackRunFile(userFolderPath, slotNumber, context.type, context.deliveryId, null);
+
             // Create a timeline child node for this incoming letter delivery. The
             // parent is the pre-delivery save node from GameData; the child becomes
             // the new save node. The signature makes this idempotent, so the fallback
@@ -400,9 +387,7 @@ export class IncomingLetterGenerator {
             const sourceRecordId = randomUUID();
             const sourceGameDate = gameData.gameDate;
 
-            this.writeFallbackRunFile(userFolderPath, slotNumber, context.type, context.deliveryId, timeline);
-
-            const messages = await this.buildMessages(gameData, context, identity);
+            const messages = await this.buildMessages(gameData, context);
             console.log(`[IncomingLetterGenerator] Generated prompt for ${signature}: ${messages.map(m => m.content).join('\n').substring(0, 200)}...`);
 
             const response = await this.apiConnection.complete(messages, false, {
@@ -431,7 +416,7 @@ export class IncomingLetterGenerator {
             }
 
             try {
-                await this.saveSummary(gameData, context, normalizedText, timeline, identity, sourceRecordId, sourceGameDate);
+                await this.saveSummary(gameData, context, normalizedText, timeline, sourceRecordId, sourceGameDate);
             } catch (summaryError) {
                 console.error(`[IncomingLetterGenerator] Summary save failed for ${signature}:`, summaryError);
             }
@@ -531,7 +516,7 @@ export class IncomingLetterGenerator {
         }
     }
 
-    private async buildMessages(gameData: GameData, context: IncomingLetterContext, identity: CampaignPlayerIdentity): Promise<Message[]> {
+    private async buildMessages(gameData: GameData, context: IncomingLetterContext): Promise<Message[]> {
         const player = gameData.characters.get(gameData.playerID);
         const sender = gameData.characters.get(context.senderId);
 
@@ -546,21 +531,17 @@ export class IncomingLetterGenerator {
 
         let summaryContent = '';
         try {
-            const userDataPath = app.getPath('userData');
+            const userDataPath = this.getVotcDataRoot();
             archiveFutureSummaryFilesForPlayer(
                 userDataPath,
                 String(gameData.playerID),
                 gameData.votcCheckpointEpoch,
                 'incoming_letter_summary_checkpoint_filter'
             );
-            const timeline = this.getSummaryTimeline(gameData);
             const summaries = await readSummaryFile(
                 userDataPath,
                 String(gameData.playerID),
-                gameData.votcCheckpointEpoch,
-                timeline.registry,
-                timeline.currentNodeId,
-                identity
+                gameData.votcCheckpointEpoch
             );
             const senderSummaries = summaries.filter(summary => summary.characterId === String(context.senderId));
             if (senderSummaries.length > 0) {
@@ -602,7 +583,7 @@ export class IncomingLetterGenerator {
         const letterLanguage = this.config.language || '中文';
         let configuredInstruction = '';
         try {
-            const effectivePrompts = getEffectivePrompts(this.config, app.getPath('userData'), gameData);
+            const effectivePrompts = getEffectivePrompts(this.config, this.getVotcDataRoot(), gameData);
             configuredInstruction = effectivePrompts?.incomingLetterPrompt ?? '';
         } catch (error) {
             console.warn(`[IncomingLetterGenerator] Failed to resolve effective prompts: ${error}`);
@@ -927,7 +908,10 @@ else = {
             throw new Error('Structured gameDate unavailable for incoming letter history save');
         }
 
-        archiveFutureLetterHistoryForPlayer(
+        // 2CE made this async (1.x was synchronous); awaiting keeps the
+        // archive pass strictly ordered before the record write below, since
+        // both read-modify-write the same campaign history file.
+        await archiveFutureLetterHistoryForPlayer(
             String(gameData.playerID),
             gameData.votcCheckpointEpoch,
             'incoming_letter_checkpoint_filter',
@@ -952,13 +936,13 @@ else = {
         await saveIncomingLetterHistory(record, identity);
     }
 
-    private async saveSummary(gameData: GameData, context: IncomingLetterContext, normalizedText: string, timeline: CreateChildNodeResult, identity: CampaignPlayerIdentity, sourceRecordId: string, gameDate?: import("../../shared/gameData/gameDate").Ck3GameDate): Promise<void> {
+    private async saveSummary(gameData: GameData, context: IncomingLetterContext, normalizedText: string, timeline: CreateChildNodeResult, sourceRecordId: string, gameDate?: import("../../shared/gameData/gameDate").Ck3GameDate): Promise<void> {
         const sender = gameData.characters.get(context.senderId);
         if (!sender) {
             throw new Error('Sender character data not found for summary save');
         }
 
-        const userDataPath = app.getPath('userData');
+        const userDataPath = this.getVotcDataRoot();
         archiveFutureSummaryFilesForPlayer(
             userDataPath,
             String(gameData.playerID),
@@ -966,14 +950,10 @@ else = {
             'incoming_letter_summary_checkpoint_filter'
         );
 
-        const summaryTimeline = this.getSummaryTimeline(gameData);
         const existingSummaries = await readSummaryFile(
             userDataPath,
             String(gameData.playerID),
-            gameData.votcCheckpointEpoch,
-            summaryTimeline.registry,
-            summaryTimeline.currentNodeId,
-            identity
+            gameData.votcCheckpointEpoch
         );
         const senderCharacterId = String(context.senderId);
         const senderSummaries = existingSummaries.filter(summary => summary.characterId === senderCharacterId);
