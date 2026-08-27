@@ -88,6 +88,10 @@ export class ClipboardListener extends EventEmitter{
                         payloads[2]
                     );
                 break;
+                case "CHRONICLE_TICK":
+                case "CHRONICLE_MANAGER":
+                    this.emit(`VOTC:${command}`, payloads);
+                break;
             }
 
 

@@ -1,4 +1,4 @@
-import { BrowserWindow } from "electron";
+import { BrowserWindow, app } from "electron";
 import { ApiConnection } from "../../shared/apiConnection";
 import { Character } from "../../shared/gameData/Character.js";
 import { GameData, Trait } from "../../shared/gameData/GameData.js";
@@ -21,6 +21,10 @@ import {
 } from '../timelineManager.js';
 import { UnsupportedTimelineSchemaError } from '../../shared/gameData/timelineProtocol.js';
 import { requireCampaignIdentity, CampaignIdentityUnavailableError } from '../campaignIdentityResolver.js';
+import { observeParsedGameDataForChronicle } from '../chronicle/chronicleObservation.js';
+import { ChronicleStoreError } from '../chronicle/chronicleAtomicJson.js';
+import { markChronicleUnhealthy } from '../chronicle/chronicleHealth.js';
+import { chronicleMemoryStorePath } from '../campaignDataPaths.js';
 import { reportCampaignIdentityUnavailable, reportCorruptTimelineRegistry, reportTimelineParentNotFound, reportUnsupportedTimelineSchema } from '../timelineRegistryRecovery.js';
 import { runLetterReplyTimelineTransition } from '../timelineBusinessWire.js';
 import type { CampaignPlayerIdentity } from '../../shared/gameData/CampaignIdentity.js';
@@ -285,6 +289,17 @@ export class LetterReplyGenerator {
                         return null;
                     }
                     throw error;
+                }
+
+                // P2 chronicle observation of the outgoing-letter snapshot
+                // (1.x LetterReplyGenerator.ts:492). Failure only marks the
+                // store unhealthy; the reply flow continues.
+                try {
+                    await observeParsedGameDataForChronicle(app.getPath('userData'), gameData, 'letter', this.config.language);
+                } catch (chronicleErr) {
+                    const code = chronicleErr instanceof ChronicleStoreError ? chronicleErr.code : undefined;
+                    console.error(`[Chronicle] observe failed (letter): code=${code ?? 'unknown'} path=${chronicleMemoryStorePath(app.getPath('userData'), identity)}`);
+                    markChronicleUnhealthy(identity, code);
                 }
 
                 // The mod bumps the checkpoint after the init line, so the child

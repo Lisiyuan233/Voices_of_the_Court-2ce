@@ -33,11 +33,21 @@ export interface Setting {
     parameters: Object;
 }
 
+// 1.x conversation_interfaces.ts:56-69 shape (characterId retained from the
+// 2CE conversation/letter flows). The chronicle source collector and the
+// incoming-letter generator persist these optional metadata fields.
 export interface Summary{
     date: string,
     content: string,
     characterId?: string;
     votcCheckpointEpoch?: number;
+    votcTimelineNodeId?: string;
+    votcTimelineParentId?: string;
+    id?: string;
+    characterName?: string;
+    sourceType?: 'conversation' | 'letter' | 'incoming_letter' | 'battle_report';
+    sourceRecordId?: string;
+    gameDate?: import("../../shared/gameData/gameDate").Ck3GameDate
 }
 
 export interface ActionArgument{

@@ -8,10 +8,14 @@ import * as fs from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
 import { archiveFutureSummaryFilesForPlayer, readSummaryFile, saveSummaryFile } from '../summaryManager.js';
-import type { Summary } from '../ts/conversation_interfaces';
+import { Summary } from '../ts/conversation_interfaces';
 import { archiveFutureLetterHistoryForPlayer, saveIncomingLetterHistory } from '../conversationHistory.js';
 import { buildIncomingLetterHistoryRecord } from './letterHistoryRecord.js';
 import { createMemoryString, getEffectivePrompts } from '../conversation/promptBuilder';
+import { observeParsedGameDataForChronicle } from '../chronicle/chronicleObservation.js';
+import { ChronicleStoreError } from '../chronicle/chronicleAtomicJson.js';
+import { markChronicleUnhealthy } from '../chronicle/chronicleHealth.js';
+import { chronicleMemoryStorePath } from '../campaignDataPaths.js';
 import {
     TimelineRegistryCorruptError,
     type CreateChildNodeResult,
@@ -230,16 +234,6 @@ export function normalizeCk3String(text: string): string {
     return normalized || 'votc_incoming_letter_fallback_desc';
 }
 
-interface IncomingSummary extends Summary {
-    votcTimelineNodeId?: string;
-    votcTimelineParentId?: string;
-    id?: string;
-    characterName?: string;
-    sourceType?: 'incoming_letter';
-    sourceRecordId?: string;
-    gameDate?: import("../../shared/gameData/gameDate").Ck3GameDate;
-}
-
 export class IncomingLetterGenerator {
     private apiConnection: ApiConnection;
     private config: Config;
@@ -386,6 +380,17 @@ export class IncomingLetterGenerator {
 
             const sourceRecordId = randomUUID();
             const sourceGameDate = gameData.gameDate;
+
+            // P2 backfill: chronicle observation of the incoming-letter
+            // snapshot (1.x IncomingLetterGenerator.ts:497). Failure only
+            // marks the store unhealthy; generation continues.
+            try {
+                await observeParsedGameDataForChronicle(app.getPath('userData'), gameData, 'incoming_letter', this.config.language);
+            } catch (chronicleErr) {
+                const code = chronicleErr instanceof ChronicleStoreError ? chronicleErr.code : undefined;
+                console.error(`[Chronicle] observe failed (incoming_letter): code=${code ?? 'unknown'} path=${chronicleMemoryStorePath(app.getPath('userData'), identity)}`);
+                markChronicleUnhealthy(identity, code);
+            }
 
             const messages = await this.buildMessages(gameData, context);
             console.log(`[IncomingLetterGenerator] Generated prompt for ${signature}: ${messages.map(m => m.content).join('\n').substring(0, 200)}...`);
@@ -960,7 +965,7 @@ else = {
         const otherSummaries = existingSummaries.filter(summary => summary.characterId !== senderCharacterId);
 
         const topicLabel = TOPIC_LABELS[context.type];
-        const newSummary: IncomingSummary = {
+        const newSummary: Summary = {
             characterId: senderCharacterId,
             date: gameData.date,
             content: `[主动来信·${topicLabel}·${gameData.date}] ${normalizedText.slice(0, 600)}`,

@@ -77,7 +77,15 @@ export class Config{
     enableSuffixPrompt!: boolean;
     selectedSelfTalkExMsgScript!: string;
 
-    constructor(configPath: string){  
+    // P2 court chronicle (1.x Config.ts:385-388). Optional so configs saved
+    // before P2 keep constructing; buildChronicleCoordinatorConfig applies
+    // the same defaults as 1.x (yearly / 30000 / 1000 / '').
+    chronicleFrequency?: 'disabled' | 'quarterly' | 'yearly';
+    chronicleRawSourceCharLimit?: number;
+    chronicleOutputMaxTokens?: number;
+    chroniclePrompt?: string;
+
+    constructor(configPath: string){
         const obj = JSON.parse(fs.readFileSync(configPath).toString());
         Object.assign(this, obj);
     }

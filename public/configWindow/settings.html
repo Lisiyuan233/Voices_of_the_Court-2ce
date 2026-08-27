@@ -192,6 +192,42 @@
 
 
       </div>
+
+        <h2 data-i18n="settings.chronicleTitle">Court Historian</h2>
+
+        <div class="border">
+          <div class="input-group">
+            <div class="row">
+              <div class="column">
+                <label data-i18n="settings.chronicleFrequency">Chronicle frequency</label>
+                <tooltip-text side="top" data-i18n="settings.chronicleFrequency.tooltip">How often the court historian writes a chronicle entry. Disabled turns off automatic generation.</tooltip-text>
+                <select id="chronicle-frequency-select">
+                  <option value="disabled" data-i18n="settings.chronicleFrequency.disabled">Disabled</option>
+                  <option value="quarterly" data-i18n="settings.chronicleFrequency.quarterly">Quarterly</option>
+                  <option value="yearly" data-i18n="settings.chronicleFrequency.yearly">Yearly</option>
+                </select>
+              </div>
+            </div>
+            <hr>
+            <div class="row">
+              <div class="column">
+                <config-number confID="chronicleRawSourceCharLimit" min="5000" max="100000" step="1000" data-i18n="settings.chronicleRawSourceCharLimit"></config-number>
+                <tooltip-text side="top" data-i18n="settings.chronicleRawSourceCharLimit.tooltip">Maximum total characters of raw source material sent to the model.</tooltip-text>
+              </div>
+              <div class="column">
+                <config-number confID="chronicleOutputMaxTokens" min="100" max="4000" step="100" data-i18n="settings.chronicleOutputMaxTokens"></config-number>
+                <tooltip-text side="top" data-i18n="settings.chronicleOutputMaxTokens.tooltip">Maximum tokens for the generated chronicle entry.</tooltip-text>
+              </div>
+            </div>
+            <div class="input-group">
+              <label data-i18n="prompts.chroniclePrompt">Chronicle Prompt</label>
+              <tooltip-text side="top" data-i18n="prompts.chroniclePrompt.tooltip"></tooltip-text>
+              <config-textarea confID="chroniclePrompt" rows="5"></config-textarea>
+            </div>
+          </div>
+        </div>
+
+
     </div>
 
   </div>
@@ -209,6 +245,7 @@
   <script>require("../../dist/configWindow/components/configCheckbox.js")</script>
   <script>require("../../dist/configWindow/components/ConfigText.js")</script>
   <script>require("../../dist/configWindow/components/ConfigNumber.js")</script>
+  <script>require("../../dist/configWindow/components/configTextarea.js")</script>
   <script>require("../../dist/configWindow/components/ConfigSlider.js")</script>
     <script>require("../../dist/configWindow/components/ParametersBox.js")</script>
   <script>require("../../dist/configWindow/components/tooltip.js")</script>
@@ -223,6 +260,19 @@
           e.preventDefault();
           const { ipcRenderer } = require('electron');
           ipcRenderer.send('open-readme-window');
+        });
+      }
+    });
+
+      // P2 chronicle frequency select (1.x settings.html:395-405)
+      const chronicleFreqSelect = document.getElementById('chronicle-frequency-select');
+      if (chronicleFreqSelect) {
+        const { ipcRenderer } = require('electron');
+        ipcRenderer.invoke('get-config').then(config => {
+          chronicleFreqSelect.value = config.chronicleFrequency || 'yearly';
+        });
+        chronicleFreqSelect.addEventListener('change', function() {
+          ipcRenderer.send('config-change', 'chronicleFrequency', chronicleFreqSelect.value);
         });
       }
     });
