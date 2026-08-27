@@ -89,6 +89,8 @@
     "action_triggered_tooltip": "This prompt is used to format the message displayed in the chat when an action is triggered.",
     "letter_prompt": "Letter Prompt",
     "letter_tooltip": "Prompt for generating letter replies.",
+    "incoming_letter_prompt": "Incoming Letter Prompt",
+    "incoming_letter_tooltip": "Prompt used when an NPC writes a letter to you first.",
     "letter_summary_prompt": "Letter Summary Prompt",
     "letter_summary_tooltip": "Prompt for summarizing a letter exchange.",
     "diary_prompt": "Diary Prompt",
@@ -805,10 +807,10 @@
     "yes": "Yes",
     "no": "No",
     "age_suffix": {
-        "infant": "(Infant)",
-        "toddler": "(Toddler)",
-        "child": "(Child)",
-        "teenager": "(Teenager)"
+      "infant": "(Infant)",
+      "toddler": "(Toddler)",
+      "child": "(Child)",
+      "teenager": "(Teenager)"
     },
     "valid": "Valid",
     "invalid": "Invalid"

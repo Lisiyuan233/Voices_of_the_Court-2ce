@@ -34,7 +34,7 @@ const conversationPromptKeys = [
     "actionPrompt", "actionTriggeredPrompt",
     "diaryPrompt", "diarySummarizePrompt", "diaryForLetterPrompt", "suggestionPrompt"
 ];
-const letterPromptKeys = ["letterPrompt", "letterSummaryPrompt"];
+const letterPromptKeys = ["letterPrompt", "incomingLetterPrompt", "letterSummaryPrompt"];
 
 async function updateTotalTokenCounts() {
     const totalConversationTokensSpan = document.getElementById('total-conversation-tokens');
@@ -96,7 +96,7 @@ const promptKeys = [
     "mainPrompt", "selfTalkPrompt", "summarizePrompt", "selfTalkSummarizePrompt",
     "memoriesPrompt", "suffixPrompt", "narrativePrompt", "sceneDescriptionPrompt",
     "actionPrompt", "actionTriggeredPrompt",
-    "letterPrompt", "letterSummaryPrompt", "diaryPrompt", "diarySummarizePrompt", "diaryForLetterPrompt",
+    "letterPrompt", "incomingLetterPrompt", "letterSummaryPrompt", "diaryPrompt", "diarySummarizePrompt", "diaryForLetterPrompt",
     "suggestionPrompt", "battleReportPrompt"
 ];
 
