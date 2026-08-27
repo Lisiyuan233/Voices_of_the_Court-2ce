@@ -78,6 +78,16 @@ export class ClipboardListener extends EventEmitter{
                 case "BATTLE_REPORT":
                     this.emit('VOTC:BATTLE_REPORT');
                     break;
+                case "INCOMING_LETTER":
+                    // Payload order matches the mod-side clipboard_codes keys:
+                    // slotId, type, deliveryId.
+                    this.emit(
+                        'VOTC:INCOMING_LETTER',
+                        payloads[0],
+                        payloads[1],
+                        payloads[2]
+                    );
+                break;
             }
 
 

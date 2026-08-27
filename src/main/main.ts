@@ -11,6 +11,7 @@ import { GameData } from "../shared/gameData/GameData.js";
 import { Letter } from "./letter/Letter.js";
 import { StoredLetter } from "./letter/letterInterfaces.js";
 import { LetterReplyGenerator } from "./letter/LetterReplyGenerator.js";
+import { IncomingLetterGenerator } from "./letter/IncomingLetterGenerator.js";
 import { LetterManager } from "./letter/LetterManager.js";
 import { BattleReportGenerator } from "./battleReport/BattleReportGenerator.js";
 import { parseLog } from "../shared/gameData/parseLog.js";
@@ -1370,6 +1371,36 @@ clipboardListener.on('VOTC:BATTLE_REPORT', async () => {
     }
 })
 
+// P1 port of the 1.x VOTC:INCOMING_LETTER wiring (1.x main.ts:1556-1591).
+// Payloads come from the mod-side clipboard_codes bridge keys in the fixed
+// order slotId/type/deliveryId; the generator re-validates all of them.
+clipboardListener.on('VOTC:INCOMING_LETTER', async (slotId?: string, type?: string, deliveryIdRaw?: string) => {
+    console.log(`ClipboardListener: VOTC:INCOMING_LETTER event detected (slot=${slotId}, type=${type}, deliveryId=${deliveryIdRaw}).`);
+    try {
+        if (!slotId || !/^incoming_letter_([1-8])$/.test(slotId)) {
+            console.error(`Invalid or missing incoming letter slotId: ${slotId}`);
+            return;
+        }
+        if (!type) {
+            console.error('Invalid or missing incoming letter type.');
+            return;
+        }
+        const deliveryId = Number(deliveryIdRaw);
+        if (!Number.isSafeInteger(deliveryId) || deliveryId < 0) {
+            console.error(`Invalid incoming letter deliveryId: ${deliveryIdRaw}`);
+            return;
+        }
+
+        const debugLogPath = path.join(config.userFolderPath, 'logs', 'debug.log');
+        await sleep(250);
+
+        const incomingLetterGenerator = new IncomingLetterGenerator(config);
+        await incomingLetterGenerator.generateIncomingLetter(debugLogPath, config.userFolderPath, slotId, type, deliveryId);
+    } catch (error) {
+        console.error('Error processing VOTC:INCOMING_LETTER event:', error);
+    }
+})
+
 //IPC
 
 ipcMain.on('message-send', async (e, message: Message) =>{
@@ -1497,6 +1528,7 @@ const promptKeys = [
     'sceneDescriptionPrompt',
     'actionPrompt',
     'letterPrompt',
+    'incomingLetterPrompt',
     'letterSummaryPrompt',
     'diaryPrompt',
     'diarySummarizePrompt',

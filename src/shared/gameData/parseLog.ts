@@ -2,7 +2,12 @@ import { GameData, Memory, Trait, OpinionModifier, Secret, Relative, KnownSecret
 import { Character } from "./Character";
 const fs = require('fs');
 
-export async function parseLog(debugLogPath: string): Promise<GameData | undefined>{
+export interface LogSnapshotRange {
+    startOffset: number;
+    endOffset: number;
+}
+
+export async function parseLog(debugLogPath: string, snapshotRange?: LogSnapshotRange): Promise<GameData | undefined>{
 async function readLastRelevantBlock(filePath: string): Promise<string | undefined> {
     const CHUNK_SIZE = 256 * 1024; // 256KB chunks
     const SEARCH_STRING = 'VOTC:IN/;/init';
@@ -62,8 +67,12 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
 
     const pendingKnownSecrets = new Map<number, Partial<KnownSecret> & { otherKnowers: { id: number; name: string }[] }>();
 
-    // Efficiently find the last block by reading from the end of the file
-    const relevantLogBlock = await readLastRelevantBlock(debugLogPath);
+    // Efficiently find the last block by reading from the end of the file.
+    // When a snapshot byte range is supplied (incoming-letter context parsing),
+    // parse exactly that selection instead of scanning for the last block.
+    const relevantLogBlock = snapshotRange
+        ? (await fs.promises.readFile(debugLogPath, 'utf8')).slice(snapshotRange.startOffset, snapshotRange.endOffset)
+        : await readLastRelevantBlock(debugLogPath);
 
     if (!relevantLogBlock) {
         console.debug("Finished parsing log file, but 'VOTC:IN/;/init' was not found. No game data will be loaded.");
