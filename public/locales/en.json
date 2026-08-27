@@ -807,10 +807,10 @@
     "yes": "Yes",
     "no": "No",
     "age_suffix": {
-      "infant": "(Infant)",
-      "toddler": "(Toddler)",
-      "child": "(Child)",
-      "teenager": "(Teenager)"
+        "infant": "(Infant)",
+        "toddler": "(Toddler)",
+        "child": "(Child)",
+        "teenager": "(Teenager)"
     },
     "valid": "Valid",
     "invalid": "Invalid"
