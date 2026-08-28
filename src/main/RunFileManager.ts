@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 
+const UTF8_BOM = Buffer.from([0xEF, 0xBB, 0xBF]);
+
 export class RunFileManager {
     private path: string;
 
@@ -23,16 +25,16 @@ export class RunFileManager {
         try {
             let currentText = '';
             if (fs.existsSync(this.path)) {
-                currentText = fs.readFileSync(this.path, 'utf-8');
+                currentText = fs.readFileSync(this.path, 'utf-8').replace(/^﻿/, '');
             }
 
             if (currentText.trim() === '') {
                 console.log(`RunFileManager: Run file is empty - writing new effect.`);
-                fs.writeFileSync(this.path, `${text}\n          
-            root = {trigger_event = mcc_event_v2.9003}`, 'utf-8');
+                this.writeWithBom(`${text}\n          
+            root = {trigger_event = mcc_event_v2.9003}`);
             } else {
                 console.log(`RunFileManager: Run file is not empty - prepending new effect.`);
-                fs.writeFileSync(this.path, `${text}\n${currentText}`, 'utf-8');
+                this.writeWithBom(`${text}\n${currentText}`);
             }
             console.log(`RunFileManager: Wrote to run file: ${text}`);
         } catch (error) {
@@ -46,7 +48,10 @@ export class RunFileManager {
             return;
         }
         try {
-            fs.appendFileSync(this.path, `\n${text}`, 'utf-8');
+            const currentText = fs.existsSync(this.path)
+                ? fs.readFileSync(this.path, 'utf-8').replace(/^﻿/, '')
+                : '';
+            this.writeWithBom(`${currentText}\n${text}`);
             console.log(`RunFileManager: Appended to run file: ${text}`);
         } catch (error) {
             console.error(`RunFileManager: Failed to append to file ${this.path}:`, error);
@@ -64,6 +69,11 @@ export class RunFileManager {
         } catch (error) {
             console.error(`RunFileManager: Failed to clear file ${this.path}:`, error);
         }
+    }
+
+    private writeWithBom(text: string): void {
+        const content = Buffer.from(text, 'utf-8');
+        fs.writeFileSync(this.path, Buffer.concat([UTF8_BOM, content]));
     }
 
     private createRunFolder(userFolderPath: string): void {
