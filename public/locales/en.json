@@ -214,9 +214,6 @@
     "text_gen_params": "Text-generation parameters",
     "chronicleTitle": "Court Historian",
     "chronicleFrequency": "Chronicle frequency",
-    "chronicleFrequency.disabled": "Disabled",
-    "chronicleFrequency.quarterly": "Quarterly",
-    "chronicleFrequency.yearly": "Yearly",
     "chronicleRawSourceCharLimit": "Raw source character limit",
     "chronicleOutputMaxTokens": "Chronicle output tokens",
     "saveFactsTitle": "Save-game facts (experimental)",
@@ -236,9 +233,7 @@
     "chronicleFrequency_disabled": "Disabled",
     "chronicleFrequency_quarterly": "Quarterly",
     "chronicleFrequency_yearly": "Yearly",
-    "settings": {
-      "saveFactsViewDiagnostics": "View diagnostics"
-    }
+    "saveFactsViewDiagnostics": "View diagnostics"
   },
   "system": {
     "update": "Update",

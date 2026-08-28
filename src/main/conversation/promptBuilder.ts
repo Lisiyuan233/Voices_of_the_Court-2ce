@@ -160,9 +160,14 @@ export async function buildChatPrompt(conv: Conversation, character: Character, 
 
     let replyToName: string;
     let isAiToAi = false;
+    // Post-review fix: keep the resolved reply-target character so the
+    // save-facts FactQuery can boost the right entity on the inferred
+    // ai-to-ai path too (previously only the name survived).
+    let replyTargetCharacter: Character | undefined;
 
     if (targetCharacter) {
         replyToName = targetCharacter.fullName;
+        replyTargetCharacter = targetCharacter;
         isAiToAi = true;
         console.log(`Explicit target provided. Setting reply target for ${character.fullName} to ${replyToName}`);
     } else {
@@ -172,6 +177,7 @@ export async function buildChatPrompt(conv: Conversation, character: Character, 
             const lastSpeaker = Array.from(conv.gameData.characters.values()).find(c => c.fullName === lastMessage.name || c.shortName === lastMessage.name);
             if (lastSpeaker) {
                 replyToName = lastSpeaker.fullName;
+                replyTargetCharacter = lastSpeaker;
                 isAiToAi = true;
                 console.log(`AI-to-AI reply detected. Setting reply target for ${character.fullName} to ${replyToName}`);
             }
@@ -328,8 +334,9 @@ export async function buildChatPrompt(conv: Conversation, character: Character, 
             const query: FactQuery = {
                 speakerCharacterId: String(character.id),
                 // 1.x parity: the reply target gets the score boost (the
-                // player for normal talks, the other AI in ai-to-ai).
-                targetCharacterIds: [String(isAiToAi && targetCharacter ? targetCharacter.id : conv.gameData.playerID)],
+                // player for normal talks, the detected/explicit other AI in
+                // ai-to-ai).
+                targetCharacterIds: [String(replyTargetCharacter ? replyTargetCharacter.id : conv.gameData.playerID)],
                 participantCharacterIds: [String(conv.gameData.playerID), String(conv.gameData.aiID)],
                 playerCharacterId: String(conv.gameData.playerID),
                 purpose: 'conversation',

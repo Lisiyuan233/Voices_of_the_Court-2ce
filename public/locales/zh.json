@@ -207,9 +207,6 @@
     "text_gen_params": "文本生成参数",
     "chronicleTitle": "宫廷史官",
     "chronicleFrequency": "编年史频率",
-    "chronicleFrequency.disabled": "禁用",
-    "chronicleFrequency.quarterly": "每季度",
-    "chronicleFrequency.yearly": "每年",
     "chronicleRawSourceCharLimit": "原始素材字符上限",
     "chronicleOutputMaxTokens": "编年史输出 token 上限",
     "saveFactsTitle": "存档事实（实验性）",
@@ -229,9 +226,7 @@
     "chronicleFrequency_disabled": "禁用",
     "chronicleFrequency_quarterly": "每季度",
     "chronicleFrequency_yearly": "每年",
-    "settings": {
-      "saveFactsViewDiagnostics": "查看诊断信息"
-    }
+    "saveFactsViewDiagnostics": "查看诊断信息"
   },
   "system": {
     "update": "更新",

@@ -206,7 +206,10 @@ describe('military snapshot block parsing', () => {
         // shifted the range and silently missed the snapshot. The block must
         // still be found when the file is large AND the prefix is CJK-heavy.
         const bigLog = path.join(tmpDir, 'military_multibyte.log');
-        const filler = ('中宫廷战报记录行。' + 'x').repeat(26000); // ~1.3 MB, no VOTC:IN markers
+        // 60000 repeats = ~1.68 MB, comfortably past the old byte-window
+        // (SCAN_BYTES = 1 MiB) so the pre-fix byte/string offset mix misses
+        // the block; 26000 repeats (~0.73 MB) never crossed that window.
+        const filler = ('中宫廷战报记录行。' + 'x').repeat(60000);
         writeFileSync(bigLog, [
             filler,
             CONVERSATION_BLOCK_A,
