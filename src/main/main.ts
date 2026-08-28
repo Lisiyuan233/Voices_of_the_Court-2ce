@@ -26,6 +26,13 @@ import type { ChronicleSignal, ChronicleCoordinatorConfig } from "./chronicle/ch
 import { requireCampaignIdentity } from "./campaignIdentityResolver.js";
 import type { CampaignPlayerIdentity } from "../shared/gameData/CampaignIdentity.js";
 import { buildContextFromGameData, buildTimelineContextFromParts, loadRegistryForContext, resolveTimelineContext, TimelineRegistry } from "./timelineManager.js";
+import { SaveParserClient } from "./saveFacts/SaveParserClient.js";
+import { SaveSnapshotWaiter } from "./saveFacts/SaveSnapshotWaiter.js";
+import { SaveSnapshotCoordinator } from "./saveFacts/SaveSnapshotCoordinator.js";
+import { SaveFactStore, type SaveFactTimelineContext } from "./saveFacts/SaveFactStore.js";
+import { resolveSaveParserExecutable } from "./saveFacts/saveParserPath.js";
+import { buildSaveFactSettings } from "./saveFacts/saveFactSettings.js";
+import { buildSaveFactDiagnosticsDto, createEmptyConversationFactContext, type ConversationFactContext } from "./saveFacts/saveFactTypes.js";
 import { loadCampaignStoreWithMigration, observedStateFromContext } from "./campaignBusiness.js";
 import { LetterManager } from "./letter/LetterManager.js";
 import { BattleReportGenerator } from "./battleReport/BattleReportGenerator.js";
@@ -875,6 +882,8 @@ app.on('ready',  async () => {
     chronicleCoordinator = new ChronicleCoordinator(app.getPath('userData'), () => buildChronicleCoordinatorConfig(config));
     console.log('Chronicle coordinator initialized.');
 
+    initializeSaveSnapshotCoordinator();
+
     startLogTailing();
 
     configWindow.window.webContents.setWindowOpenHandler(({ url }) => {
@@ -942,8 +951,105 @@ ipcMain.on('clear-summaries', ()=>{
 
 let conversation: Conversation;
 
+// ---------------------------------------------------------------------------
+// P5 save facts (1.x main.ts parity, agency/session/delta parts deferred to
+// P5b). Any initialization failure only disables save facts for this session.
+// ---------------------------------------------------------------------------
+let saveSnapshotCoordinator: SaveSnapshotCoordinator | undefined;
+let lastSaveFactDiagnostics: ReturnType<typeof buildSaveFactDiagnosticsDto> | null = null;
+let conversationStartGeneration = 0;
+
+interface SaveFactUiStatus {
+    state: 'loading' | 'available' | 'disabled' | 'fallback' | 'unsupported';
+    code?: string;
+    factCount?: number;
+}
+
+function sendSaveFactStatus(status: SaveFactUiStatus): void {
+    if (chatWindow?.window && !chatWindow.window.isDestroyed()) {
+        chatWindow.window.webContents.send('save-facts-status', status);
+    }
+}
+
+function saveFactStatusFromContext(context: ConversationFactContext): SaveFactUiStatus {
+    switch (context.snapshotStatus) {
+        case 'available':
+            return { state: 'available', factCount: context.baselineFacts.length };
+        case 'disabled':
+            return { state: 'disabled' };
+        case 'unsupported':
+            return { state: 'unsupported', code: context.diagnostics.errorCode };
+        default:
+            // unavailable/timeout/mismatch/failed/superseded all converge to a
+            // non-modal fallback: the conversation runs on live GameData only.
+            return { state: 'fallback', code: context.diagnostics.errorCode };
+    }
+}
+
+function willWaitForSaveSnapshot(gameData: GameData, settings: ReturnType<typeof buildSaveFactSettings>): boolean {
+    return settings.enabled
+        && settings.parserEnabled
+        && gameData.saveSnapshotExtraResult?.status === 'available';
+}
+
+function initializeSaveSnapshotCoordinator(): void {
+    try {
+        const logger = { warn: (message: string) => console.warn(message) };
+        const resolveParserExecutable = () => resolveSaveParserExecutable({
+            isPackaged: app.isPackaged,
+            resourcesPath: process.resourcesPath,
+            appPath: app.getAppPath(),
+            platform: process.platform,
+            arch: process.arch,
+            logger
+        });
+        const parserClient = new SaveParserClient({ resolveExecutable: resolveParserExecutable, logger });
+        const waiter = new SaveSnapshotWaiter({ client: parserClient, logger });
+        saveSnapshotCoordinator = new SaveSnapshotCoordinator({
+            waiter,
+            parserClient,
+            createStore: (userDataDir, identity) => new SaveFactStore(userDataDir, identity, {
+                onWarning: code => console.warn(`[save-facts] persistence warning: ${code}`)
+            }),
+            resolveCampaignIdentity: requireCampaignIdentity,
+            resolveParserExecutable,
+            getUserFolderPath: () => config.userFolderPath,
+            getTimelineContext: (gameData, identity) => {
+                // Best-effort: without a registry the cache lookup still runs
+                // and checkpoint provenance falls back to the GameData epoch.
+                try {
+                    const registry = loadRegistryForContext(app.getPath('userData'), buildContextFromGameData(gameData));
+                    if (!registry) {
+                        return undefined;
+                    }
+                    const timeline = resolveTimelineContext(registry, buildContextFromGameData(gameData));
+                    const context: SaveFactTimelineContext = {
+                        registry,
+                        currentNodeId: timeline.timelineNodeId,
+                        checkpointEpoch: timeline.checkpointEpoch ?? gameData.votcCheckpointEpoch
+                    };
+                    return context;
+                } catch (error) {
+                    console.warn('[save-facts] timeline context unavailable; proceeding without a registry:', error);
+                    return undefined;
+                }
+            },
+            logger
+        });
+        console.log('SaveSnapshotCoordinator initialized.');
+    } catch (error) {
+        saveSnapshotCoordinator = undefined;
+        console.error('[save-facts] coordinator initialization failed; save facts are disabled for this session:', error);
+    }
+}
+
 clipboardListener.on('VOTC:IN', async () =>{
     console.log('ClipboardListener: VOTC:IN event detected. Showing chat window.');
+
+    // P5 (1.x Task 16 step 2): every new start supersedes the previous one;
+    // a stale handler whose prepare resolves late must never construct the
+    // conversation.
+    const startGeneration = ++conversationStartGeneration;
 
     // Check for incompatible mods
     const dlcLoadPath = path.join(config.userFolderPath, 'dlc_load.json');
@@ -1016,6 +1122,31 @@ clipboardListener.on('VOTC:IN', async () =>{
             console.error(`[Chronicle] observe failed (conversation): code=${code ?? 'unknown'} path=${storePath ?? 'n/a'}`);
         }
 
+        // P5 Task 16 step 3: prepare the immutable fact context BEFORE
+        // constructing the Conversation. prepare() never rejects; a missing
+        // coordinator (initialization failure) degrades to a disabled context.
+        // The loading state is exclusive to a debug-mode protocol-1 tail:
+        // non-debug CK3 emits the disabled 0/0/0 tail and the coordinator
+        // returns before any file I/O or sidecar work.
+        const saveFactSettings = buildSaveFactSettings(config);
+        if (saveSnapshotCoordinator !== undefined && willWaitForSaveSnapshot(gameData, saveFactSettings)) {
+            sendSaveFactStatus({ state: 'loading' });
+        }
+        const factContext: ConversationFactContext = saveSnapshotCoordinator !== undefined
+            ? await saveSnapshotCoordinator.prepare(gameData, {
+                appUserDataDir: app.getPath('userData'),
+                settings: saveFactSettings,
+                startGeneration
+            })
+            : createEmptyConversationFactContext('disabled');
+
+        if (startGeneration !== conversationStartGeneration) {
+            console.log(`Conversation start ${startGeneration} superseded by a newer start; discarding the late result.`);
+            return;
+        }
+        lastSaveFactDiagnostics = buildSaveFactDiagnosticsDto(factContext, undefined);
+        sendSaveFactStatus(saveFactStatusFromContext(factContext));
+
         // Clear pending letters if the player character has changed
         if (currentSessionPlayerId && currentSessionPlayerId !== String(gameData.playerID)) {
             console.log(`Player switch detected. Old: ${currentSessionPlayerId}, New: ${gameData.playerID}. Clearing pending letters.`);
@@ -1034,7 +1165,7 @@ clipboardListener.on('VOTC:IN', async () =>{
         if (gameData.gameDate?.totalDays ?? gameData.totalDays) {
             updateCurrentDate(gameData.gameDate?.totalDays ?? gameData.totalDays);
         }
-        conversation = new Conversation(gameData, config, chatWindow, userDataPath);
+        conversation = new Conversation(gameData, config, chatWindow, userDataPath, factContext);
         await conversation.loadHistory();
 
         // Import letters from log
@@ -1618,6 +1749,14 @@ const promptKeys = [
     'battleReportPrompt'
 ];
 
+ipcMain.handle('save-facts:get-diagnostics', () => {
+    const settings = buildSaveFactSettings(config);
+    if (!settings.diagnosticsEnabled) {
+        return null;
+    }
+    return lastSaveFactDiagnostics;
+});
+
 ipcMain.on('config-change', (e, confID: string, newValue: any) =>{
     console.log(`IPC: Received config-change event. ID: ${confID}, New Value: ${newValue}`);
 
@@ -1629,6 +1768,19 @@ ipcMain.on('config-change', (e, confID: string, newValue: any) =>{
         }
         // @ts-ignore
         config.prompts[config.language][confID] = newValue;
+    } else if (confID.includes('.')) {
+        // P5: dotted confIDs (e.g. "saveFacts.enabled") address nested config
+        // bags; intermediate objects are created on demand.
+        const parts = confID.split('.');
+        // @ts-ignore
+        let target: any = config;
+        for (let i = 0; i < parts.length - 1; i++) {
+            if (typeof target[parts[i]] !== 'object' || target[parts[i]] === null) {
+                target[parts[i]] = {};
+            }
+            target = target[parts[i]];
+        }
+        target[parts[parts.length - 1]] = newValue;
     } else {
         // @ts-ignore
         config[confID] = newValue;

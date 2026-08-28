@@ -1,0 +1,25 @@
+[package]
+name = "votc-save-facts"
+version = "0.1.0"
+edition = "2021"
+description = "Bounded CK3 save fact extraction sidecar for Voices of the Court"
+publish = false
+
+# 依赖白名单：serde + serde_json（Task 2）；jomini（envelope 抽象，Task 3）、
+# rawzip（ZIP central directory 严格 entry 策略，jomini envelope 的底层库，
+# 版本保持一致）、sha2（sourceFingerprint，Task 3）。
+# 保持纯 Rust 依赖树（flate2 走 zlib-rs），便于 WSL 交叉编译 windows-gnu。
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jomini = { version = "0.35", default-features = false, features = ["envelope", "derive"] }
+rawzip = "0.5"
+sha2 = "0.11"
+
+# flate2 仅用于测试侧合成 deflate 压缩的 ZIP fixture（jomini envelope 只
+# 支持 deflate entry）；运行时解压走 jomini 自带的 flate2/zlib-rs。
+[dev-dependencies]
+flate2 = "1"
+
+# 注意：任何 profile 都不得设置 panic = "abort"，
+# main 依赖 catch_unwind 输出 PARSER_CRASHED 安全响应。

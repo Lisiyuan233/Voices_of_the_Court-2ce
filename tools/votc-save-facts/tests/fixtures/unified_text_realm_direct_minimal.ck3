@@ -1,0 +1,10 @@
+game_version="1.19.0"
+living={
+	1001={
+		alive_data={ direct_vassal_of=1005 }
+		landed_data={ realm_capital=200 }
+	}
+}
+landed_titles={
+	200={ key=c_capital holder=1001 }
+}

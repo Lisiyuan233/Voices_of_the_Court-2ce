@@ -26,6 +26,7 @@ import { parseGameDate } from '../../shared/dateUtils.js';
 import { listPromptTranscriptFiles } from '../conversationHistory.js';
 import { archiveFutureSummaryFilesForPlayer, filterSummariesForCheckpoint } from '../summaryManager.js';
 import { getSimilarity } from '../../shared/stringUtils.js';
+import { createEmptyConversationFactContext, type ConversationFactContext } from '../saveFacts/saveFactTypes.js';
 import { parseVariables } from '../parseVariables.js';
 import { ActionEffectWriter } from './ActionEffectWriter.js';
 import {
@@ -104,11 +105,16 @@ export class Conversation{
     // closed instead of writing timeline records.
     campaignIdentity: import('../../shared/gameData/CampaignIdentity.js').CampaignPlayerIdentity | undefined;
 
+    // P5: immutable save-fact context prepared before construction. Defaults
+    // to a disabled context (legacy mod / feature off) - never undefined, so
+    // prompt-side consumers can project unconditionally.
+    factContext: ConversationFactContext;
+
     // §9.3 P5.4 fix C1: requestKey UUID reused across retries of the same
     // close attempt; cleared when the close reaches terminal state.
     private currentCloseRequestKey: string | undefined;
 
-    constructor(gameData: GameData, config: Config, chatWindow: ChatWindow, userDataPath: string){
+    constructor(gameData: GameData, config: Config, chatWindow: ChatWindow, userDataPath: string, factContext?: ConversationFactContext){
         console.log('Conversation initialized.');
         console.log(`[Conversation.ts CONSTRUCTOR] Initializing with scene: '${gameData.scene}'`);
         this.userDataPath = userDataPath;
@@ -120,6 +126,7 @@ export class Conversation{
         this.messages = [];
         this.currentSummary = "";
         this.config = config;
+        this.factContext = factContext ?? createEmptyConversationFactContext('disabled');
 
         // Load translations
         const lang = this.config.language || 'en';

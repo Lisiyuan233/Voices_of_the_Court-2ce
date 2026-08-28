@@ -228,6 +228,40 @@
         </div>
 
 
+        <h2 data-i18n="settings.saveFactsTitle">Save-game facts (experimental)</h2>
+
+        <div class="border">
+          <div class="input-group">
+            <div class="row">
+              <div class="column">
+                <config-checkbox confID="saveFacts.enabled" data-i18n="settings.saveFactsParsing"></config-checkbox>
+                <tooltip-text side="top" data-i18n="settings.saveFactsParsing.tooltip">Read a structured snapshot of your save game (family, realm, wars, court) and use it as verified facts. Requires launching the game with -debug_mode; when off, the app never touches save files.</tooltip-text>
+              </div>
+              <div class="column">
+                <config-checkbox confID="saveFacts.parserEnabled" data-i18n="settings.saveFactsParser"></config-checkbox>
+                <tooltip-text side="top" data-i18n="settings.saveFactsParser.tooltip">Allow launching the bundled save-parser helper on the snapshot file. Requires the master switch above.</tooltip-text>
+              </div>
+            </div>
+            <div class="row">
+              <div class="column">
+                <config-checkbox confID="saveFacts.promptEnabled" data-i18n="settings.saveFactsPrompt"></config-checkbox>
+                <tooltip-text side="top" data-i18n="settings.saveFactsPrompt.tooltip">Inject the verified save-game facts into conversation prompts as a bounded game_facts block. Requires the two switches above.</tooltip-text>
+              </div>
+            </div>
+            <div class="row">
+              <div class="column">
+                <config-checkbox confID="saveFacts.diagnosticsEnabled" data-i18n="settings.saveFactsDiagnostics"></config-checkbox>
+                <tooltip-text side="top" data-i18n="settings.saveFactsDiagnostics.tooltip">Expose anonymous save-fact diagnostics (status codes and category counts only) to this settings window.</tooltip-text>
+              </div>
+            </div>
+            <div class="input-group">
+              <label data-i18n="settings.saveFactsPrivacyNote">Privacy note</label>
+              <span style="font-size: 0.85em;" data-i18n="settings.saveFactsPrivacyNoteText">The snapshot is read from a save file this mod writes (save games/votc_context.ck3). It never leaves your machine; only derived fact lines are sent to your configured LLM provider as part of prompts. All of this stays off unless you enable it here.</span>
+            </div>
+          </div>
+        </div>
+
+
     </div>
 
   </div>

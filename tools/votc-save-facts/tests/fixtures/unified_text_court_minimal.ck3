@@ -1,0 +1,13 @@
+game_version="1.19.0"
+living={
+	1001={
+		first_name="Player"
+		court_data={
+			host=1002
+			leave_court_date=869.3.9
+		}
+	}
+	1002={
+		first_name="Host"
+	}
+}

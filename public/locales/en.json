@@ -807,10 +807,10 @@
     "yes": "Yes",
     "no": "No",
     "age_suffix": {
-        "infant": "(Infant)",
-        "toddler": "(Toddler)",
-        "child": "(Child)",
-        "teenager": "(Teenager)"
+      "infant": "(Infant)",
+      "toddler": "(Toddler)",
+      "child": "(Child)",
+      "teenager": "(Teenager)"
     },
     "valid": "Valid",
     "invalid": "Invalid"
@@ -900,5 +900,16 @@
     "description_label": "Current conversation information:",
     "system_prompt": "You are a scene description generation assistant responsible for creating vivid scene atmosphere descriptions for role-playing games.",
     "fallback_description": "On {{date}}, {{playerName}} and {{aiName}} started a conversation at {{location}}."
-  }
+  },
+  "settings.saveFactsTitle": "Save-game facts (experimental)",
+  "settings.saveFactsParsing": "Enable save-game snapshot parsing",
+  "settings.saveFactsParsing.tooltip": "Read a structured snapshot of your save game (family, realm, wars, court) and use it as verified facts. Requires launching the game with -debug_mode; when off, the app never touches save files.",
+  "settings.saveFactsPrompt": "Inject verified facts into prompts",
+  "settings.saveFactsPrompt.tooltip": "Inject the verified save-game facts into conversation prompts as a bounded game_facts block.",
+  "settings.saveFactsDiagnostics": "Allow diagnostics view",
+  "settings.saveFactsDiagnostics.tooltip": "Expose anonymous save-fact diagnostics (status codes and category counts only) to this settings window.",
+  "settings.saveFactsPrivacyNote": "Privacy note",
+  "settings.saveFactsPrivacyNoteText": "The snapshot is read from a save file this mod writes (save games/votc_context.ck3). It never leaves your machine; only derived fact lines are sent to your configured LLM provider as part of prompts. All of this stays off unless you enable it here.",
+  "settings.saveFactsParser": "Allow the save-parser helper",
+  "settings.saveFactsParser.tooltip": "Allow launching the bundled save-parser helper on the snapshot file. Requires the master switch above."
 }

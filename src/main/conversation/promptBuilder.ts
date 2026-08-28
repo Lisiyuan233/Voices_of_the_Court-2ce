@@ -9,6 +9,10 @@ import { app } from 'electron';
 import fs from 'fs';
 import { parseGameDate, getDateDifference } from '../../shared/dateUtils.js';
 import { formatMilitaryBrief } from './militaryBrief';
+import { SaveFactProjector, countTokensCl100k } from '../saveFacts/SaveFactProjector';
+import { buildSaveFactSettings } from '../saveFacts/saveFactSettings';
+import { renderGameFactsBlock } from '../saveFacts/saveFactRenderer';
+import type { FactQuery } from '../saveFacts/saveFactTypes';
 import { readDiarySummaries } from "../diaryManager.js";
 import { LocalizationManager } from "../../shared/LocalizationManager.js";
 import { GameData } from "../../shared/gameData/GameData.js";
@@ -309,6 +313,66 @@ export async function buildChatPrompt(conv: Conversation, character: Character, 
         };
         insertMessageAtDepth(messages, militaryMessage, conv.config.descInsertDepth);
         console.log('Inserted military situation brief at depth: ' + conv.config.descInsertDepth + '.');
+    }
+
+    // P5: save-fact <game_facts> block (1.x Task 16/17 parity). The projector
+    // self-gates on snapshotStatus and promptEnabled; the renderer emits ''
+    // when nothing fits, so an empty result never injects a dangling tag.
+    // Any failure here degrades to live GameData only and never blocks the
+    // conversation prompt.
+    try {
+        const factSettings = buildSaveFactSettings(conv.config);
+        const factLanguage: 'en' | 'zh' = (conv.config.language || 'en') === 'en' ? 'en' : 'zh';
+        if (conv.factContext.snapshotStatus === 'available' && factSettings.promptEnabled) {
+            const recentMessages = messages.filter(m => m.role === 'user' || m.role === 'assistant').slice(-6);
+            const recentConversationText = recentMessages.map(m => String(m.content)).join('\n').slice(-4000);
+            const query: FactQuery = {
+                speakerCharacterId: String(character.id),
+                targetCharacterIds: [String(character.id)],
+                participantCharacterIds: [String(conv.gameData.playerID), String(conv.gameData.aiID)],
+                playerCharacterId: String(conv.gameData.playerID),
+                purpose: 'conversation',
+                recentUserText: recentMessages.filter(m => m.role === 'user').map(m => String(m.content)).join('\n').slice(-4000),
+                recentConversationText,
+                topicHints: [],
+                maxTokens: factSettings.baselineTokenBudget + factSettings.dynamicTokenBudget
+            };
+            const projector = new SaveFactProjector({
+                settings: factSettings,
+                promptLanguage: factLanguage
+            });
+            const projection = projector.project(conv.factContext, query);
+            const laneLineCount = projection.laneLines.baseline.length + projection.laneLines.dynamic.length;
+            if (laneLineCount > 0) {
+                const rendered = renderGameFactsBlock({
+                    language: factLanguage,
+                    asOfGameDate: projection.asOfGameDate,
+                    lanes: [
+                        {
+                            lane: 'baseline',
+                            lines: projection.laneLines.baseline,
+                            maxTokens: projection.laneBudgets.baseline
+                        },
+                        {
+                            lane: 'dynamic',
+                            lines: projection.laneLines.dynamic,
+                            maxTokens: projection.laneBudgets.dynamic
+                        }
+                    ],
+                    countTokens: countTokensCl100k
+                });
+                if (rendered.renderedText) {
+                    const factMessage: Message = {
+                        role: "system",
+                        content: rendered.renderedText
+                    };
+                    insertMessageAtDepth(messages, factMessage, conv.config.descInsertDepth);
+                    console.log('Inserted ' + laneLineCount + ' save facts (' + rendered.usedTokens + ' tokens) at depth: ' + conv.config.descInsertDepth + '.');
+                }
+            }
+        }
+    } catch (saveFactErr) {
+        console.error('[save-facts] prompt projection failed; continuing without fact block:', saveFactErr);
     }
 
 

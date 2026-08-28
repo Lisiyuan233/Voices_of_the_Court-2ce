@@ -1,0 +1,74 @@
+SAV0100aabbccdd0000005c
+meta_data={
+	version="1.13.0"
+	meta_player_id=1001
+	meta_player_name="Placeholder Player"
+}
+date=867.1.15
+variables={
+	data={
+		{
+			flag="votc_campaign_id_a"
+			data={
+				type=integer
+				value=111000
+			}
+		}
+		{
+			flag="votc_campaign_id_b"
+			data={
+				type=integer
+				value=222000
+			}
+		}
+		{
+			flag="votc_campaign_id_c"
+			data={
+				type=integer
+				value=333000
+			}
+		}
+		{
+			flag="votc_campaign_id_d"
+			data={
+				type=integer
+				value=444000
+			}
+		}
+		{
+			flag="votc_save_snapshot_protocol"
+			data={
+				type=integer
+				value=1000
+			}
+		}
+		{
+			flag="votc_save_snapshot_sequence"
+			data={
+				type=integer
+				value=17000
+			}
+		}
+		{
+			flag="votc_save_snapshot_slot"
+			data={
+				type=integer
+				value=0
+			}
+		}
+	}
+	size=7
+	list={
+		{
+			name="votc_join_candidates"
+			item={ type=char identity=13206 }
+			item={ type=char identity=33435 }
+		}
+	}
+}
+living={
+	9999={
+		alive_data={
+		}
+	}
+}

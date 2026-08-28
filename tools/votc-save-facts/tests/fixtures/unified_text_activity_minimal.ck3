@@ -1,0 +1,15 @@
+game_version="1.19.0"
+locations={
+	5001={ name="Royal Hall" }
+}
+living={
+	1001={
+		first_name="Player"
+		alive_data={
+			location={
+				location=5001
+			}
+		}
+		secret_location=9999
+	}
+}

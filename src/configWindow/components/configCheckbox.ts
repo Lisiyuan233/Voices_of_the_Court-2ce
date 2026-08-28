@@ -44,7 +44,7 @@ class ConfigCheckbox extends HTMLElement{
         let config = await ipcRenderer.invoke('get-config');
 
         //@ts-ignore
-        this.checkbox.checked = config[confID] !== undefined ? config[confID] : true; // Default to true
+        this.checkbox.checked = this.resolveConfigValue(config, confID); // Default to true
 
         this.checkbox.addEventListener("change", (e: any) => {
             console.log(confID)
@@ -62,6 +62,20 @@ class ConfigCheckbox extends HTMLElement{
                 this.updateTranslation(i18nKey);
             });
         }
+    }
+
+    // P5: dotted confIDs (e.g. "saveFacts.enabled") address nested config
+    // bags; a missing path still falls back to the legacy checked-by-default.
+    public resolveConfigValue(config: any, confID: string): boolean {
+        const parts = confID.split('.');
+        let value: any = config;
+        for (const part of parts) {
+            if (value === undefined || value === null) {
+                return true;
+            }
+            value = value[part];
+        }
+        return value !== undefined ? value : true;
     }
 
     public updateTranslation(key?: string) {

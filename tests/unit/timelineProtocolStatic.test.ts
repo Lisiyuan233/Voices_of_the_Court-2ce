@@ -88,7 +88,25 @@ function expectInitProducerTail(tail: string[]): void {
 //   data[23]    debug save-snapshot protocol read placeholder (single field;
 //               mod2 ce never writes the variable, so it parses as 0)
 // Unlike mod1 there is NO date-extra block and NO conversation session tail.
-const EXPECTED_INIT_FIELD_COUNT = INIT_CORE_FIELD_COUNT + PROTOCOL_TAIL_FIELD_COUNT + 1;
+const INIT_TAIL_START_INDEX = INIT_CORE_FIELD_COUNT;
+// P5: the save-snapshot placeholder grew into the date-extra five-pack plus
+// the protocol/sequence/slot triple (see saveSnapshotProtocol.ts indices
+// 23..30). The short-talk emitters (v3s/v3l/v3) carry the full tail since P5.
+const DATE_EXTRA_TOKENS = [
+    '[GetCurrentDate.GetDateAsTotalDays]',
+    '[GetCurrentDate.GetYear]',
+    '[GetCurrentDate.GetMonthOfYear]',
+    '[GetCurrentDate.GetDayOfMonth]',
+    '[GetCurrentDate.GetStringShort]'
+];
+const SAVE_SNAPSHOT_TAIL_TOKENS = [
+    "[GetPlayer.MakeScope.Var('votc_save_snapshot_protocol').GetValue|0]",
+    "[GetPlayer.MakeScope.Var('votc_save_snapshot_sequence').GetValue|0]",
+    "[GetPlayer.MakeScope.Var('votc_save_snapshot_slot').GetValue|0]"
+];
+const INIT_DATE_EXTRA_START_INDEX = INIT_TAIL_START_INDEX + PROTOCOL_TAIL_FIELD_COUNT;
+const INIT_SAVE_SNAPSHOT_START_INDEX = INIT_DATE_EXTRA_START_INDEX + DATE_EXTRA_TOKENS.length;
+const EXPECTED_INIT_FIELD_COUNT = INIT_CORE_FIELD_COUNT + PROTOCOL_TAIL_FIELD_COUNT + DATE_EXTRA_TOKENS.length + SAVE_SNAPSHOT_TAIL_TOKENS.length;
 const CHECKPOINT_EPOCH_TOKEN = "[GetPlayer.MakeScope.Var('votc_checkpoint_epoch').GetValue|0]";
 const EXPECTED_INIT_CORE_TOKENS = [
     '[GetPlayer.GetID]',
@@ -107,9 +125,6 @@ const EXPECTED_INIT_CORE_TOKENS = [
     "[GetPlayer.MakeScope.Var('votc_checkpoint_token').GetValue|0]",
     "[GetPlayer.MakeScope.Var('votc_checkpoint_pending_token').GetValue|0]"
 ];
-const SAVE_SNAPSHOT_PROTOCOL_PLACEHOLDER_TOKEN = "[GetPlayer.MakeScope.Var('votc_save_snapshot_protocol').GetValue|0]";
-const INIT_TAIL_START_INDEX = INIT_CORE_FIELD_COUNT;
-const INIT_SAVE_SNAPSHOT_PLACEHOLDER_INDEX = INIT_TAIL_START_INDEX + PROTOCOL_TAIL_FIELD_COUNT;
 
 describe('init producer tail consistency', () => {
     for (const file of INIT_PRODUCER_FILES) {
@@ -120,19 +135,19 @@ describe('init producer tail consistency', () => {
             for (const line of lines) {
                 const fields = splitFields(line).slice(2);
                 // Every production init producer carries exactly the core
-                // segment, the protocol tail and the save-snapshot placeholder.
+                // segment, the protocol tail, the date-extra five-pack and the
+                // save-snapshot triple (P5 layout, indices 23..30).
                 expect(fields.length).toBe(EXPECTED_INIT_FIELD_COUNT);
                 // Core segment: identity/date/scene/location fields followed
                 // by the checkpoint epoch and timeline state variables.
                 expect(fields.slice(0, INIT_CORE_FIELD_COUNT)).toEqual(EXPECTED_INIT_CORE_TOKENS);
-                expectInitProducerTail(fields.slice(INIT_TAIL_START_INDEX, INIT_SAVE_SNAPSHOT_PLACEHOLDER_INDEX));
-                expect(fields[INIT_SAVE_SNAPSHOT_PLACEHOLDER_INDEX]).toBe(SAVE_SNAPSHOT_PROTOCOL_PLACEHOLDER_TOKEN);
-                // Negative contracts: no date-extra block (mod1's
-                // GetDateAsTotalDays segment between controller and epoch does
-                // not exist here — the short date at index 4 is the only date
-                // field) and no background_texture tail segment (that travels
-                // on the separate VOTC:BACKGROUND line instead).
-                expect(line).not.toContain('GetDateAsTotalDays');
+                expectInitProducerTail(fields.slice(INIT_TAIL_START_INDEX, INIT_DATE_EXTRA_START_INDEX));
+                expect(fields.slice(INIT_DATE_EXTRA_START_INDEX, INIT_SAVE_SNAPSHOT_START_INDEX)).toEqual(DATE_EXTRA_TOKENS);
+                expect(fields.slice(INIT_SAVE_SNAPSHOT_START_INDEX)).toEqual(SAVE_SNAPSHOT_TAIL_TOKENS);
+                // Negative contract: no background_texture tail segment (that
+                // travels on the separate VOTC:BACKGROUND line instead). The
+                // date five-pack's GetDateAsTotalDays must appear exactly once.
+                expect(line.split('GetDateAsTotalDays').length - 1).toBe(1);
                 expect(line).not.toContain('background');
             }
         });
@@ -156,16 +171,16 @@ describe('init producer tail consistency', () => {
             const content = readModFile(file);
             const lines = findDebugLogLines(content, 'VOTC:IN/;/init/;/');
             for (const line of lines) {
-                tails.push(splitFields(line).slice(2).slice(INIT_TAIL_START_INDEX, INIT_SAVE_SNAPSHOT_PLACEHOLDER_INDEX).join('/;/'));
+                tails.push(splitFields(line).slice(2).slice(INIT_TAIL_START_INDEX).join('/;/'));
             }
         }
         expect(new Set(tails).size).toBe(1);
     });
 
-    it('never writes the save snapshot protocol variable anywhere in the mod', () => {
-        // The placeholder at index 23 must keep parsing as 0: nothing in
-        // mod2 ce may set votc_save_snapshot_* state until that feature is
-        // actually ported from mod1.
+    it('only writes the save snapshot protocol variables from the P5 effects file', () => {
+        // P5 ported mod1's save-snapshot protocol: the variables may now be
+        // set, but only from votc_save_snapshot_effects.txt (fail-closed gate
+        // included); every other effects file must keep its hands off them.
         const effectsRoot = path.join(MOD_ROOT, 'common/scripted_effects');
         const files = fs.readdirSync(effectsRoot, { encoding: 'utf-8' }).filter(f => f.endsWith('.txt'));
         const writers: string[] = [];
@@ -175,7 +190,7 @@ describe('init producer tail consistency', () => {
                 writers.push(file);
             }
         }
-        expect(writers).toEqual([]);
+        expect(writers).toEqual(['votc_save_snapshot_effects.txt']);
     });
 });
 

@@ -4,3 +4,5 @@
 .idea/*
 debug/*
 
+/tools/votc-save-facts/target/
+/build/save-parser/

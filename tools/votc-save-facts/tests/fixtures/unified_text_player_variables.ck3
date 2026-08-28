@@ -1,0 +1,38 @@
+SAV0100aabbccdd00000022
+meta_data={
+	version="1.19.2.3"
+}
+date=867.1.15
+variables={
+	data={
+		{ flag="votc_campaign_id_a" data={ type=value identity=11100000 } }
+		{ flag="votc_campaign_id_b" data={ type=value identity=22200000 } }
+		{ flag="votc_campaign_id_c" data={ type=value identity=33300000 } }
+		{ flag="votc_campaign_id_d" data={ type=value identity=44400000 } }
+	}
+}
+living={
+	999={
+		alive_data={
+			variables={
+				data={
+					{ flag="votc_save_snapshot_protocol" data={ type=value identity=100000 } }
+					{ flag="votc_save_snapshot_sequence" data={ type=value identity=9900000 } }
+					{ flag="votc_save_snapshot_slot" data={ type=value identity=100000 } }
+				}
+			}
+		}
+	}
+	1001={
+		alive_data={
+			variables={
+				data={
+					{ flag="votc_save_snapshot_protocol" data={ type=value identity=100000 } }
+					{ flag="votc_save_snapshot_sequence" data={ type=value identity=1700000 } }
+					{ flag="votc_save_snapshot_slot" data={ type=value } }
+				}
+			}
+		}
+	}
+}
+played_character={ character=1001 player=1 }

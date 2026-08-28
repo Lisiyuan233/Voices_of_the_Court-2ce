@@ -7,6 +7,10 @@ module.exports = {
   packagerConfig: {
     icon: './build/icons/icon', // Electron Forge will automatically use .ico for Windows and .icns for Mac
     //"asar":true
+    // P5: ships the Rust save-parser sidecar (build/stageSaveParser.js stages
+    // the exe into build/save-parser/win32-x64/; saveParserPath.ts resolves it
+    // from process.resourcesPath in packaged builds).
+    extraResource: ['./build/save-parser'],
     ignore: /^(\/out|\/tests|\/logs|\/debug|\/\.)/
   },
   rebuildConfig: {},

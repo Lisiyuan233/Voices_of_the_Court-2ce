@@ -85,6 +85,25 @@ export class Config{
     chronicleOutputMaxTokens?: number;
     chroniclePrompt?: string;
 
+    // P5 experimental save-game facts. The bag is normalized by
+    // buildSaveFactSettings (src/main/saveFacts/saveFactSettings.ts); every
+    // flag defaults off and only the literal boolean true enables it. Settings
+    // UI writes dotted confIDs ("saveFacts.enabled") resolved by the
+    // config-change handler.
+    saveFacts?: {
+        enabled?: boolean;
+        parserEnabled?: boolean;
+        promptEnabled?: boolean;
+        prepareDeadlineMs?: number;
+        parserTimeoutMs?: number;
+        pollIntervalMs?: number;
+        baselineTokenBudget?: number;
+        dynamicTokenBudget?: number;
+        diagnosticsEnabled?: boolean;
+        directRealmEnabled?: boolean;
+        categories?: Record<string, boolean>;
+    };
+
     constructor(configPath: string){
         const obj = JSON.parse(fs.readFileSync(configPath).toString());
         Object.assign(this, obj);
