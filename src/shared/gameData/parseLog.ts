@@ -1,4 +1,5 @@
 import { GameData, Memory, Trait, OpinionModifier, Secret, Relative, KnownSecret} from "./GameData";
+import { MilitarySnapshot, WarInfo, SiegeInfo, ArmyInfo, MilitaryAttendee, MilitaryAttendeeRole, WarSide } from "./GameData";
 import { Character } from "./Character";
 const fs = require('fs');
 
@@ -66,6 +67,10 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
     const deferredRelations: { charAID: number, charBID: number, relationship: string }[] = [];
 
     const pendingKnownSecrets = new Map<number, Partial<KnownSecret> & { otherKnowers: { id: number; name: string }[] }>();
+
+    // P3 military snapshot accumulation state (block-scoped). Regiments follow
+    // the most recent army line, mirroring 1.x GameDataRecordAccumulator.
+    let lastMilitaryArmyId: number | undefined = undefined;
 
     // Efficiently find the last block by reading from the end of the file.
     // When a snapshot byte range is supplied (incoming-letter context parsing),
@@ -537,6 +542,183 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
                 }
                 case "sibling_eob":
                     break;
+
+                // --- P3: military council snapshot block ---
+                // Field order contract (1.x GameDataRecordAccumulator parity)
+                // is pinned by tests/unit/militaryProtocolStatic.test.ts and
+                // documented in docs/superpowers/plans/2026-08-28-p3-military-snapshot.md.
+                case "military_snapshot": {
+                    const snap = ensureMilitarySnapshot();
+                    snap.snapshotId = data[1] ?? '';
+                    snap.snapshotDate = data[2] ?? '';
+                    lastMilitaryArmyId = undefined;
+                    break;
+                }
+                case "war": {
+                    const snap = ensureMilitarySnapshot();
+                    const id = Number(data[1]);
+                    if (!Number.isFinite(id) || id === 0) break;
+                    // The war line carries the id twice (root slot + first payload
+                    // field); the first copy is the rootID slot and carries no data.
+                    const war: WarInfo = {
+                        id,
+                        name: data[2] ?? '',
+                        startDate: data[3],
+                        playerSide: (data[4] === 'defender' ? 'defender' : 'attacker') as WarSide,
+                        primaryAttacker: { id: Number(data[5]) || 0, name: data[6] ?? '' },
+                        primaryDefender: { id: Number(data[7]) || 0, name: data[8] ?? '' },
+                        casusBelli: data[9] || undefined,
+                        targetTitle: data[10] ? { id: data[10], name: data[11] ?? '' } : undefined,
+                        score: {
+                            total: Number(data[12]) || 0,
+                            battles: Number(data[13]) || 0,
+                            occupation: Number(data[14]) || 0,
+                            imprisonment: Number(data[15]) || 0,
+                            ticking: Number(data[16]) || 0,
+                            perspective: 'attacker'
+                        },
+                        participants: [],
+                        armies: [],
+                        sieges: [],
+                        truncation: { total: 0, omitted: 0 }
+                    };
+                    snap.wars.set(id, war);
+                    break;
+                }
+                case "war_participant": {
+                    const snap = ensureMilitarySnapshot();
+                    const war = snap.wars.get(Number(data[1]));
+                    if (!war) break;
+                    war.participants.push({
+                        character: { id: Number(data[2]) || 0, name: data[3] ?? '' },
+                        side: (data[4] === 'defender' ? 'defender' : 'attacker') as WarSide,
+                        militaryStrength: Number(data[5]) || 0
+                    });
+                    break;
+                }
+                case "siege": {
+                    const snap = ensureMilitarySnapshot();
+                    const siege: SiegeInfo = {
+                        id: Number(data[2]) || 0,
+                        warId: Number(data[1]) || 0,
+                        location: { id: Number(data[3]) || 0, name: data[4] ?? '' },
+                        commander: Number(data[5]) ? { id: Number(data[5]), name: data[6] ?? '' } : undefined,
+                        attackerMen: Number(data[7]) || 0,
+                        defenderMen: Number(data[8]) || 0,
+                        progress: Number(data[9]) || 0
+                    };
+                    const war = snap.wars.get(siege.warId);
+                    if (war) war.sieges.push(siege);
+                    break;
+                }
+                case "war_truncation": {
+                    const snap = ensureMilitarySnapshot();
+                    const war = snap.wars.get(Number(data[1]));
+                    if (!war) break;
+                    war.truncation = { total: Number(data[2]) || 0, omitted: data[3] === '1' ? 1 : 0 };
+                    break;
+                }
+                case "army": {
+                    const snap = ensureMilitarySnapshot();
+                    // Contract: root slot = 0, data[1] = filler 0, data[2] = army id
+                    // (two fillers before the id, matching the mod emission).
+                    const id = Number(data[2]);
+                    if (!Number.isFinite(id) || id === 0) break;
+                    const soldiers = Number(data[9]) || 0;
+                    const levies = Number(data[11]) || 0;
+                    const army: ArmyInfo = {
+                        commandSlot: Number(data[25]) || undefined,
+                        id,
+                        name: data[26],
+                        owner: { id: Number(data[3]) || 0, name: data[4] ?? '' },
+                        commander: Number(data[5]) ? { id: Number(data[5]), name: data[6] ?? '' } : undefined,
+                        side: (data[7] === 'defender' ? 'defender' : 'attacker') as WarSide,
+                        isPlayerOwned: data[8] === '1',
+                        possibleWarAssociation: true,
+                        soldiers,
+                        maxSoldiers: Number(data[10]) || 0,
+                        levies,
+                        menAtArms: Math.max(0, soldiers - levies),
+                        quality: data[13],
+                        location: { id: Number(data[14]) || 0, name: data[15] ?? '' },
+                        supply: Number(data[16]) || 0,
+                        supplyChange: Number(data[17]) || 0,
+                        attrition: Number(data[18]) || 0,
+                        state: {
+                            gathering: data[19] === 'yes' || data[19] === '1',
+                            moving: data[20] === 'yes' || data[20] === '1',
+                            embarked: data[21] === 'yes' || data[21] === '1',
+                            retreating: data[22] === 'yes' || data[22] === '1',
+                            inCombat: data[23] === 'yes' || data[23] === '1',
+                            inSiege: data[24] === 'yes' || data[24] === '1'
+                        },
+                        regiments: []
+                    };
+                    snap.armies.push(army);
+                    lastMilitaryArmyId = id;
+                    break;
+                }
+                case "army_regiment": {
+                    const snap = ensureMilitarySnapshot();
+                    const army = snap.armies.find(a => a.id === (lastMilitaryArmyId ?? rootID));
+                    if (!army) break;
+                    army.regiments.push({
+                        typeName: data[1] ?? '',
+                        count: Number(data[2]) || 0,
+                        max: Number(data[3]) || undefined,
+                        isLevies: data[4] === 'yes' || data[4] === '1',
+                        isMAA: data[5] === 'yes' || data[5] === '1',
+                        isKnight: data[6] === 'yes' || data[6] === '1',
+                        name: data[7]
+                    });
+                    break;
+                }
+                case "war_event": {
+                    const snap = ensureMilitarySnapshot();
+                    snap.events.push({
+                        date: data[1] ?? '',
+                        type: data[2] ?? '',
+                        payload: data[3] ?? ''
+                    });
+                    break;
+                }
+                case "military_attendee": {
+                    const snap = ensureMilitarySnapshot();
+                    const validRoles: readonly string[] = ['marshal', 'field_commander', 'knight', 'commander_candidate', 'war_leader_adviser'];
+                    const roles = (data[2] ?? '')
+                        .split(',')
+                        .map((s: string) => s.trim())
+                        .filter((s: string) => s.length > 0)
+                        .map((r: string) => (validRoles.includes(r) ? (r as MilitaryAttendeeRole) : 'war_leader_adviser' as MilitaryAttendeeRole));
+                    const slots = (data[3] ?? '')
+                        .split(',')
+                        .map((s: string) => Number(s))
+                        .filter((n: number) => Number.isFinite(n) && n > 0);
+                    const canCommand = data[4] !== '0';
+                    let attendee = snap.attendees.find(a => a.character.id === rootID);
+                    if (!attendee) {
+                        const known = gameData?.characters.get(rootID);
+                        attendee = {
+                            character: { id: rootID, name: data[1] || known?.fullName || '' },
+                            roles: [],
+                            commandSlots: [],
+                            canCommandPlayerArmies: canCommand
+                        };
+                        snap.attendees.push(attendee);
+                    }
+                    for (const role of roles) {
+                        if (!attendee.roles.includes(role)) attendee.roles.push(role);
+                    }
+                    for (const slot of slots) {
+                        if (!attendee.commandSlots.includes(slot)) attendee.commandSlots.push(slot);
+                    }
+                    break;
+                }
+                case "military_snapshot_complete": {
+                    const snap = ensureMilitarySnapshot();
+                    snap.complete = true;
+                    break;
+                }
             }
         } else {
             if (line.trim() !== "") {
@@ -596,6 +778,27 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
                 relativeChar.birthTotalDays = extras.birthTotalDays;
             }
         }
+    }
+
+    // Lazily creates the military snapshot. Tolerates init-less military blocks
+    // (readLastMilitarySnapshotFromLog tail scans) by creating a bare GameData
+    // the same way GameData.fromPlainObject does.
+    function ensureMilitarySnapshot(): MilitarySnapshot {
+        if (!gameData) {
+            gameData = new GameData(new Array(10).fill(''));
+        }
+        if (!gameData.militarySnapshot) {
+            gameData.militarySnapshot = {
+                snapshotId: '',
+                snapshotDate: '',
+                wars: new Map<number, WarInfo>(),
+                armies: [],
+                attendees: [],
+                events: [],
+                complete: false
+            };
+        }
+        return gameData.militarySnapshot;
     }
 
     function commitNewRelation(charAID: number, charBID: number, relationship: string): void {
@@ -677,6 +880,51 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
     }
     
     return gameData!;
+}
+
+/**
+ * Extracts the most recent complete military snapshot from anywhere in the
+ * debug.log tail (military blocks live in military-council conversation
+ * blocks, not necessarily in the block a caller just parsed). Locates the
+ * last `VOTC:IN/;/military_snapshot/` line, bounds the block at the next
+ * `VOTC:IN/;/init` line (or EOF) and reuses the regular parser over that
+ * byte range. Returns undefined when no complete snapshot exists.
+ */
+export async function readLastMilitarySnapshotFromLog(debugLogPath: string): Promise<MilitarySnapshot | undefined> {
+    const START = 'VOTC:IN/;/military_snapshot/';
+    const END = 'VOTC:IN/;/init';
+    const SCAN_BYTES = 4 * 256 * 1024; // military snapshot blocks are compact; a 1MB tail is generous
+    let handle;
+    try {
+        if (!fs.existsSync(debugLogPath)) return undefined;
+        handle = await fs.promises.open(debugLogPath, 'r');
+        const { size } = await handle.stat();
+        const readStart = Math.max(0, size - SCAN_BYTES);
+        const len = size - readStart;
+        const buffer = Buffer.alloc(len);
+        await handle.read(buffer, 0, len, readStart);
+        const content = buffer.toString('utf8');
+
+        const startIdx = content.lastIndexOf(START);
+        if (startIdx === -1) return undefined;
+        const absStart = readStart + Math.max(0, content.lastIndexOf('\n', startIdx) + 1);
+
+        let endAbs = size;
+        const endIdx = content.indexOf(END, startIdx + START.length);
+        if (endIdx !== -1) {
+            endAbs = readStart + Math.max(0, content.lastIndexOf('\n', endIdx) + 1);
+        }
+        if (endAbs <= absStart) return undefined;
+
+        const gameData = await parseLog(debugLogPath, { startOffset: absStart, endOffset: endAbs });
+        const snapshot = gameData?.militarySnapshot;
+        return snapshot?.complete ? snapshot : undefined;
+    } catch (err) {
+        console.error(`[parseLog] readLastMilitarySnapshotFromLog failed: ${err}`);
+        return undefined;
+    } finally {
+        if (handle) await handle.close();
+    }
 }
 
 const MAX_LAWS = 10;

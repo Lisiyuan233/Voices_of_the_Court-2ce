@@ -8,6 +8,7 @@ import path from 'path';
 import { app } from 'electron';
 import fs from 'fs';
 import { parseGameDate, getDateDifference } from '../../shared/dateUtils.js';
+import { formatMilitaryBrief } from './militaryBrief';
 import { readDiarySummaries } from "../diaryManager.js";
 import { LocalizationManager } from "../../shared/LocalizationManager.js";
 import { GameData } from "../../shared/gameData/GameData.js";
@@ -290,6 +291,24 @@ export async function buildChatPrompt(conv: Conversation, character: Character, 
 
         insertMessageAtDepth(messages, descMessage, conv.config.descInsertDepth);
         console.log(`Inserted description for ${character.fullName} at depth: ${conv.config.descInsertDepth}.`);
+    }
+
+    // P3: military council situation brief. gameData.militarySnapshot only
+    // exists in military-council conversation blocks (the mod emits it solely
+    // for votc_military_council), so snapshot presence is the scene gate —
+    // the same content 1.x gated by scene inside its description scripts.
+    // English + Simplified Chinese for now; other app languages fall back to
+    // English per the migration plan's translation-debt policy.
+    const militaryBriefText = formatMilitaryBrief(conv.gameData.militarySnapshot, {
+        lang: (conv.config.language || 'en').startsWith('zh') ? 'zh' : 'en'
+    });
+    if (militaryBriefText) {
+        const militaryMessage: Message = {
+            role: "system",
+            content: militaryBriefText
+        };
+        insertMessageAtDepth(messages, militaryMessage, conv.config.descInsertDepth);
+        console.log('Inserted military situation brief at depth: ' + conv.config.descInsertDepth + '.');
     }
 
 

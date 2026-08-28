@@ -2,6 +2,9 @@ import { ApiConnection } from "../../shared/apiConnection";
 import { Character } from "../../shared/gameData/Character";
 import { Config } from "../../shared/Config";
 import { GameData } from "../../shared/gameData/GameData";
+import { MilitarySnapshot } from "../../shared/gameData/GameData";
+import { readLastMilitarySnapshotFromLog } from "../../shared/gameData/parseLog";
+import { formatMilitaryBrief } from "../conversation/militaryBrief";
 import { Message } from "../ts/conversation_interfaces";
 import { getEffectivePrompts } from "../conversation/promptBuilder";
 import * as fs from "fs";
@@ -155,6 +158,11 @@ export class BattleReportGenerator {
                 return null;
             }
 
+            // P3: enrich reports with the most recent military council snapshot
+            // (war/siege/army situation). Absent or incomplete snapshots simply
+            // skip the section — never blocks the report.
+            const militarySnapshot = await readLastMilitarySnapshotFromLog(debugLogPath);
+
             const pending = latestBattlesBySlot.filter(battleData => {
                 const signature = this.getBattleSignature(battleData);
                 return !battleReportCompletedSignatures.has(signature)
@@ -212,7 +220,7 @@ export class BattleReportGenerator {
             for (const battleData of pending) {
                 const signature = this.getBattleSignature(battleData);
                 try {
-                    const promptText = this.buildBattleReportPrompt(battleData, gameData);
+                    const promptText = this.buildBattleReportPrompt(battleData, gameData, militarySnapshot);
                     console.log(`Generated battle report prompt for ${battleData.slotId}: ${promptText.substring(0, 200)}...`);
 
                     const messages: Message[] = [
@@ -393,7 +401,7 @@ export class BattleReportGenerator {
         return latestBattles;
     }
 
-    private buildBattleReportPrompt(battleData: BattleReportData, gameData: GameData | undefined): string {
+    private buildBattleReportPrompt(battleData: BattleReportData, gameData: GameData | undefined, militarySnapshot?: MilitarySnapshot): string {
         const language = this.getOutputLanguage();
         const player = gameData?.characters.get(Number(battleData.playerId)) || gameData?.getPlayer();
         const playerName = this.getPlayerName(battleData, gameData, player);
@@ -407,6 +415,16 @@ export class BattleReportGenerator {
         const notableCharacters = this.describeNotableCharacters(battleData, this.config.language, gameData);
         const worldContext = this.describeWorldContext(gameData);
         const worldContextFact = worldContext ? `- Current broader game context: ${worldContext}\n` : "";
+        // P3: compact war/siege/army context from the latest military council
+        // snapshot. formatMilitaryBrief returns '' for absent/incomplete
+        // snapshots, so this section self-gates.
+        const militaryContext = formatMilitaryBrief(militarySnapshot, {
+            maxChars: 4000,
+            lang: (this.config.language || "en").startsWith("zh") ? "zh" : "en"
+        });
+        const militaryContextSection = militaryContext
+            ? `\nRecent war situation (from the last military council snapshot):\n${militaryContext}\n`
+            : "";
         const result = battleData.result === "victory"
             ? "This was a victory for the player."
             : battleData.result === "defeat"
@@ -440,8 +458,7 @@ ${environmentFact}- Winner: ${winnerName} (${battleData.winnerId || "unknown"})
 - Commanders: ${commanders}
 - Important deaths or captures: ${notableCharacters}
 - Notable tags: ${tags}
-${worldContextFact}
-
+${worldContextFact}${militaryContextSection}
 Known character context:
 - Player ruler: ${this.describeCharacterForPrompt(player, playerName)}
 - Winner profile: ${this.describeCharacterForPrompt(winner, winnerName)}
