@@ -8,10 +8,13 @@
     "createTypeDefs": "node ./build/createGameDataTypeDefs.js",
     "build": "tsc",
     "start": "npm run build && electron .",
-    "package": "npm run build && electron-forge package",
-    "make": "npm run createTypeDefs && npm run build && electron-forge make",
+    "package": "npm run save-parser:build && npm run save-parser:stage && npm run build && electron-forge package && npm run package:verify",
+    "make": "npm run save-parser:build && npm run save-parser:stage && npm run createTypeDefs && npm run build && electron-forge make && npm run package:verify",
     "publish": "npm run build && electron-forge publish",
-    "test": "jest"
+    "test": "jest",
+    "save-parser:build": "cargo build --release --locked --manifest-path tools/votc-save-facts/Cargo.toml",
+    "save-parser:stage": "node ./build/stageSaveParser.js",
+    "package:verify": "node ./build/checkPackagedSaveParser.js"
   },
   "keywords": [],
   "author": "VOTC Community",

@@ -9,9 +9,8 @@ import { app } from 'electron';
 import fs from 'fs';
 import { parseGameDate, getDateDifference } from '../../shared/dateUtils.js';
 import { formatMilitaryBrief } from './militaryBrief';
-import { SaveFactProjector, countTokensCl100k } from '../saveFacts/SaveFactProjector';
+import { SaveFactProjector } from '../saveFacts/SaveFactProjector';
 import { buildSaveFactSettings } from '../saveFacts/saveFactSettings';
-import { renderGameFactsBlock } from '../saveFacts/saveFactRenderer';
 import type { FactQuery } from '../saveFacts/saveFactTypes';
 import { readDiarySummaries } from "../diaryManager.js";
 import { LocalizationManager } from "../../shared/LocalizationManager.js";
@@ -325,14 +324,16 @@ export async function buildChatPrompt(conv: Conversation, character: Character, 
         const factLanguage: 'en' | 'zh' = (conv.config.language || 'en') === 'en' ? 'en' : 'zh';
         if (conv.factContext.snapshotStatus === 'available' && factSettings.promptEnabled) {
             const recentMessages = messages.filter(m => m.role === 'user' || m.role === 'assistant').slice(-6);
-            const recentConversationText = recentMessages.map(m => String(m.content)).join('\n').slice(-4000);
+            const recentConversationText = recentMessages.map(m => `${m.name ?? m.role}: ${String(m.content)}`).join('\n').slice(-2000);
             const query: FactQuery = {
                 speakerCharacterId: String(character.id),
-                targetCharacterIds: [String(character.id)],
+                // 1.x parity: the reply target gets the score boost (the
+                // player for normal talks, the other AI in ai-to-ai).
+                targetCharacterIds: [String(isAiToAi && targetCharacter ? targetCharacter.id : conv.gameData.playerID)],
                 participantCharacterIds: [String(conv.gameData.playerID), String(conv.gameData.aiID)],
                 playerCharacterId: String(conv.gameData.playerID),
                 purpose: 'conversation',
-                recentUserText: recentMessages.filter(m => m.role === 'user').map(m => String(m.content)).join('\n').slice(-4000),
+                recentUserText: recentMessages.filter(m => m.role === 'user').map(m => `${m.name ?? m.role}: ${String(m.content)}`).join('\n').slice(-2000),
                 recentConversationText,
                 topicHints: [],
                 maxTokens: factSettings.baselineTokenBudget + factSettings.dynamicTokenBudget
@@ -344,30 +345,15 @@ export async function buildChatPrompt(conv: Conversation, character: Character, 
             const projection = projector.project(conv.factContext, query);
             const laneLineCount = projection.laneLines.baseline.length + projection.laneLines.dynamic.length;
             if (laneLineCount > 0) {
-                const rendered = renderGameFactsBlock({
-                    language: factLanguage,
-                    asOfGameDate: projection.asOfGameDate,
-                    lanes: [
-                        {
-                            lane: 'baseline',
-                            lines: projection.laneLines.baseline,
-                            maxTokens: projection.laneBudgets.baseline
-                        },
-                        {
-                            lane: 'dynamic',
-                            lines: projection.laneLines.dynamic,
-                            maxTokens: projection.laneBudgets.dynamic
-                        }
-                    ],
-                    countTokens: countTokensCl100k
-                });
-                if (rendered.renderedText) {
+                // project() already returned the fully rendered block (same
+                // token estimator) - reuse it instead of re-rendering the lanes.
+                if (projection.renderedText) {
                     const factMessage: Message = {
                         role: "system",
-                        content: rendered.renderedText
+                        content: projection.renderedText
                     };
                     insertMessageAtDepth(messages, factMessage, conv.config.descInsertDepth);
-                    console.log('Inserted ' + laneLineCount + ' save facts (' + rendered.usedTokens + ' tokens) at depth: ' + conv.config.descInsertDepth + '.');
+                    console.log('Inserted ' + laneLineCount + ' save facts (' + projection.usedTokens + ' tokens) at depth: ' + conv.config.descInsertDepth + '.');
                 }
             }
         }

@@ -200,11 +200,11 @@
             <div class="row">
               <div class="column">
                 <label data-i18n="settings.chronicleFrequency">Chronicle frequency</label>
-                <tooltip-text side="top" data-i18n="settings.chronicleFrequency.tooltip">How often the court historian writes a chronicle entry. Disabled turns off automatic generation.</tooltip-text>
+                <tooltip-text side="top" data-i18n="settings.chronicleFrequency_tooltip">How often the court historian writes a chronicle entry. Disabled turns off automatic generation.</tooltip-text>
                 <select id="chronicle-frequency-select">
-                  <option value="disabled" data-i18n="settings.chronicleFrequency.disabled">Disabled</option>
-                  <option value="quarterly" data-i18n="settings.chronicleFrequency.quarterly">Quarterly</option>
-                  <option value="yearly" data-i18n="settings.chronicleFrequency.yearly">Yearly</option>
+                  <option value="disabled" data-i18n="settings.chronicleFrequency_disabled">Disabled</option>
+                  <option value="quarterly" data-i18n="settings.chronicleFrequency_quarterly">Quarterly</option>
+                  <option value="yearly" data-i18n="settings.chronicleFrequency_yearly">Yearly</option>
                 </select>
               </div>
             </div>
@@ -212,16 +212,16 @@
             <div class="row">
               <div class="column">
                 <config-number confID="chronicleRawSourceCharLimit" min="5000" max="100000" step="1000" data-i18n="settings.chronicleRawSourceCharLimit"></config-number>
-                <tooltip-text side="top" data-i18n="settings.chronicleRawSourceCharLimit.tooltip">Maximum total characters of raw source material sent to the model.</tooltip-text>
+                <tooltip-text side="top" data-i18n="settings.chronicleRawSourceCharLimit_tooltip">Maximum total characters of raw source material sent to the model.</tooltip-text>
               </div>
               <div class="column">
                 <config-number confID="chronicleOutputMaxTokens" min="100" max="4000" step="100" data-i18n="settings.chronicleOutputMaxTokens"></config-number>
-                <tooltip-text side="top" data-i18n="settings.chronicleOutputMaxTokens.tooltip">Maximum tokens for the generated chronicle entry.</tooltip-text>
+                <tooltip-text side="top" data-i18n="settings.chronicleOutputMaxTokens_tooltip">Maximum tokens for the generated chronicle entry.</tooltip-text>
               </div>
             </div>
             <div class="input-group">
               <label data-i18n="prompts.chroniclePrompt">Chronicle Prompt</label>
-              <tooltip-text side="top" data-i18n="prompts.chroniclePrompt.tooltip"></tooltip-text>
+              <tooltip-text side="top" data-i18n="prompts.chroniclePrompt_tooltip"></tooltip-text>
               <config-textarea confID="chroniclePrompt" rows="5"></config-textarea>
             </div>
           </div>
@@ -235,24 +235,28 @@
             <div class="row">
               <div class="column">
                 <config-checkbox confID="saveFacts.enabled" data-i18n="settings.saveFactsParsing"></config-checkbox>
-                <tooltip-text side="top" data-i18n="settings.saveFactsParsing.tooltip">Read a structured snapshot of your save game (family, realm, wars, court) and use it as verified facts. Requires launching the game with -debug_mode; when off, the app never touches save files.</tooltip-text>
+                <tooltip-text side="top" data-i18n="settings.saveFactsParsing_tooltip">Read a structured snapshot of your save game (family, realm, wars, court) and use it as verified facts. Requires launching the game with -debug_mode; when off, the app never touches save files.</tooltip-text>
               </div>
               <div class="column">
                 <config-checkbox confID="saveFacts.parserEnabled" data-i18n="settings.saveFactsParser"></config-checkbox>
-                <tooltip-text side="top" data-i18n="settings.saveFactsParser.tooltip">Allow launching the bundled save-parser helper on the snapshot file. Requires the master switch above.</tooltip-text>
+                <tooltip-text side="top" data-i18n="settings.saveFactsParser_tooltip">Allow launching the bundled save-parser helper on the snapshot file. Requires the master switch above.</tooltip-text>
               </div>
             </div>
             <div class="row">
               <div class="column">
                 <config-checkbox confID="saveFacts.promptEnabled" data-i18n="settings.saveFactsPrompt"></config-checkbox>
-                <tooltip-text side="top" data-i18n="settings.saveFactsPrompt.tooltip">Inject the verified save-game facts into conversation prompts as a bounded game_facts block. Requires the two switches above.</tooltip-text>
+                <tooltip-text side="top" data-i18n="settings.saveFactsPrompt_tooltip">Inject the verified save-game facts into conversation prompts as a bounded game_facts block. Requires the two switches above.</tooltip-text>
               </div>
             </div>
             <div class="row">
               <div class="column">
                 <config-checkbox confID="saveFacts.diagnosticsEnabled" data-i18n="settings.saveFactsDiagnostics"></config-checkbox>
-                <tooltip-text side="top" data-i18n="settings.saveFactsDiagnostics.tooltip">Expose anonymous save-fact diagnostics (status codes and category counts only) to this settings window.</tooltip-text>
+                <tooltip-text side="top" data-i18n="settings.saveFactsDiagnostics_tooltip">Expose anonymous save-fact diagnostics (status codes and category counts only) to this settings window.</tooltip-text>
               </div>
+            </div>
+            <div class="input-group">
+              <button id="save-facts-view-diagnostics" data-i18n="settings.saveFactsViewDiagnostics">View diagnostics</button>
+              <pre id="save-facts-diagnostics" style="display: none; max-height: 220px; overflow: auto; font-size: 0.8em; white-space: pre-wrap;"></pre>
             </div>
             <div class="input-group">
               <label data-i18n="settings.saveFactsPrivacyNote">Privacy note</label>
@@ -300,6 +304,27 @@
 
       // P2 chronicle frequency select (1.x settings.html:395-405)
       const chronicleFreqSelect = document.getElementById('chronicle-frequency-select');
+      const saveFactsDiagButton = document.getElementById('save-facts-view-diagnostics');
+      if (saveFactsDiagButton) {
+        saveFactsDiagButton.addEventListener('click', async function() {
+          const { ipcRenderer } = require('electron');
+          const readout = document.getElementById('save-facts-diagnostics');
+          if (!readout) return;
+          readout.style.display = 'block';
+          readout.textContent = '...';
+          try {
+            const dto = await ipcRenderer.invoke('save-facts:get-diagnostics');
+            if (!dto) {
+              readout.textContent = 'Diagnostics are disabled (enable "Allow diagnostics view" and the master switches).';
+              return;
+            }
+            readout.textContent = JSON.stringify(dto, null, 2);
+          } catch (err) {
+            readout.textContent = 'Failed to load diagnostics: ' + err;
+          }
+        });
+      }
+
       if (chronicleFreqSelect) {
         const { ipcRenderer } = require('electron');
         ipcRenderer.invoke('get-config').then(config => {

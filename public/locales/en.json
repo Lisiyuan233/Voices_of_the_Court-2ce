@@ -140,7 +140,9 @@
     "mod_elder_kings_2": "Elder Kings 2",
     "total_tokens_header": "Total Tokens",
     "total_conversation_tokens": "Total Conversation Tokens:",
-    "total_letter_tokens": "Total Letter Tokens:"
+    "total_letter_tokens": "Total Letter Tokens:",
+    "chroniclePrompt": "Chronicle Prompt",
+    "chroniclePrompt_tooltip": "System prompt template used by the court historian when generating a chronicle entry."
   },
   "battleReport": {
     "refresh": "Refresh",
@@ -209,7 +211,34 @@
     "instruct_header": "Instruct settings",
     "input_seq": "Input sequence",
     "output_seq": "output sequence",
-    "text_gen_params": "Text-generation parameters"
+    "text_gen_params": "Text-generation parameters",
+    "chronicleTitle": "Court Historian",
+    "chronicleFrequency": "Chronicle frequency",
+    "chronicleFrequency.disabled": "Disabled",
+    "chronicleFrequency.quarterly": "Quarterly",
+    "chronicleFrequency.yearly": "Yearly",
+    "chronicleRawSourceCharLimit": "Raw source character limit",
+    "chronicleOutputMaxTokens": "Chronicle output tokens",
+    "saveFactsTitle": "Save-game facts (experimental)",
+    "saveFactsParsing": "Enable save-game snapshot parsing",
+    "saveFactsParser": "Allow the save-parser helper",
+    "saveFactsPrompt": "Inject verified facts into prompts",
+    "saveFactsDiagnostics": "Allow diagnostics view",
+    "saveFactsPrivacyNote": "Privacy note",
+    "saveFactsPrivacyNoteText": "The snapshot is read from a save file this mod writes (save games/votc_context.ck3). It never leaves your machine; only derived fact lines are sent to your configured LLM provider as part of prompts. All of this stays off unless you enable it here.",
+    "chronicleFrequency_tooltip": "How often the court historian writes a chronicle entry. Disabled turns off automatic generation.",
+    "chronicleRawSourceCharLimit_tooltip": "Maximum total characters of raw source material sent to the model.",
+    "chronicleOutputMaxTokens_tooltip": "Maximum tokens for the generated chronicle entry.",
+    "saveFactsParsing_tooltip": "Read a structured snapshot of your save game (family, realm, wars, court) and use it as verified facts. Requires launching the game with -debug_mode; when off, the app never touches save files.",
+    "saveFactsParser_tooltip": "Allow launching the bundled save-parser helper on the snapshot file. Requires the master switch above.",
+    "saveFactsPrompt_tooltip": "Inject the verified save-game facts into conversation prompts as a bounded game_facts block. Requires the two switches above.",
+    "saveFactsDiagnostics_tooltip": "Expose anonymous save-fact diagnostics (status codes and category counts only) to this settings window.",
+    "chronicleFrequency_disabled": "Disabled",
+    "chronicleFrequency_quarterly": "Quarterly",
+    "chronicleFrequency_yearly": "Yearly",
+    "settings": {
+      "saveFactsViewDiagnostics": "View diagnostics"
+    }
   },
   "system": {
     "update": "Update",
@@ -285,7 +314,10 @@
     "edit_tooltip": "Press Enter or click outside of the edit box to save, Escape to cancel. Standard Ctrl+Z/Cmd+Z for undo is supported.",
     "cancel_button": "CANCEL",
     "cancel_response_tooltip": "Cancel the current AI response generation.",
-    "generation_cancelled": "Generation cancelled by user."
+    "generation_cancelled": "Generation cancelled by user.",
+    "save_facts_loading": "Reading save-game facts...",
+    "save_facts_fallback": "Save facts unavailable; continuing without them.",
+    "save_facts_unsupported": "Save format not supported; save facts disabled."
   },
   "narrative": {
     "fallback_prompt": "Please generate a short narrative based on the following conversation, describing the atmosphere of the scene or the character's inner feelings. The narrative should be concise and vivid, with a length of 50-100 words.",
@@ -900,16 +932,5 @@
     "description_label": "Current conversation information:",
     "system_prompt": "You are a scene description generation assistant responsible for creating vivid scene atmosphere descriptions for role-playing games.",
     "fallback_description": "On {{date}}, {{playerName}} and {{aiName}} started a conversation at {{location}}."
-  },
-  "settings.saveFactsTitle": "Save-game facts (experimental)",
-  "settings.saveFactsParsing": "Enable save-game snapshot parsing",
-  "settings.saveFactsParsing.tooltip": "Read a structured snapshot of your save game (family, realm, wars, court) and use it as verified facts. Requires launching the game with -debug_mode; when off, the app never touches save files.",
-  "settings.saveFactsPrompt": "Inject verified facts into prompts",
-  "settings.saveFactsPrompt.tooltip": "Inject the verified save-game facts into conversation prompts as a bounded game_facts block.",
-  "settings.saveFactsDiagnostics": "Allow diagnostics view",
-  "settings.saveFactsDiagnostics.tooltip": "Expose anonymous save-fact diagnostics (status codes and category counts only) to this settings window.",
-  "settings.saveFactsPrivacyNote": "Privacy note",
-  "settings.saveFactsPrivacyNoteText": "The snapshot is read from a save file this mod writes (save games/votc_context.ck3). It never leaves your machine; only derived fact lines are sent to your configured LLM provider as part of prompts. All of this stays off unless you enable it here.",
-  "settings.saveFactsParser": "Allow the save-parser helper",
-  "settings.saveFactsParser.tooltip": "Allow launching the bundled save-parser helper on the snapshot file. Requires the master switch above."
+  }
 }

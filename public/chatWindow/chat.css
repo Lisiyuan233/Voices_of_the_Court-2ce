@@ -1350,3 +1350,17 @@ html{
 .action-decline-button:hover {
     background-color: #C95452;
 }
+
+/* P5 save-facts snapshot status (audit L3): mirrors .queue-status placement */
+#save-facts-status {
+    position: absolute;
+    top: 75px;
+    right: 15px;
+    background: rgba(15, 15, 15, 0.5);
+    border: 1px solid #3d2e1e;
+    padding: 5px 10px;
+    font-size: 0.85em;
+    color: #cca43b;
+    border-radius: 4px;
+    z-index: 40;
+}

@@ -199,6 +199,28 @@ describe('military snapshot block parsing', () => {
         expect(snapshot!.armies).toHaveLength(2);
     });
 
+    it('recovers the snapshot from a log whose tail exceeds 1 MB of multibyte content', async () => {
+        // Regression for the audit H2 byte/string offset mix: the old tail
+        // scan computed a byte-window start but indexed it with string
+        // offsets, so any multibyte (CJK) content before the military block
+        // shifted the range and silently missed the snapshot. The block must
+        // still be found when the file is large AND the prefix is CJK-heavy.
+        const bigLog = path.join(tmpDir, 'military_multibyte.log');
+        const filler = ('中宫廷战报记录行。' + 'x').repeat(26000); // ~1.3 MB, no VOTC:IN markers
+        writeFileSync(bigLog, [
+            filler,
+            CONVERSATION_BLOCK_A,
+            MILITARY_BODY,
+            CONVERSATION_BLOCK_B
+        ].join('\n'));
+
+        const snapshot = await readLastMilitarySnapshotFromLog(bigLog);
+        expect(snapshot).toBeDefined();
+        expect(snapshot!.complete).toBe(true);
+        expect(snapshot!.wars.size).toBe(2);
+        expect(snapshot!.armies).toHaveLength(2);
+    });
+
     it('returns undefined when no complete military snapshot exists', async () => {
         const noMilitary = path.join(tmpDir, 'no_military.log');
         writeFileSync(noMilitary, CONVERSATION_BLOCK_A);

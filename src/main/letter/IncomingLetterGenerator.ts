@@ -32,10 +32,10 @@ import type { CampaignPlayerIdentity } from '../../shared/gameData/CampaignIdent
 import { runIncomingLetterTimelineTransition } from '../timelineBusinessWire.js';
 
 // 2CE divergence note: the 1.x generator additionally injected Agency
-// projections (P4) and fed the chronicle (P2). Neither subsystem exists in
-// 2CE yet, so both integration points are omitted here and are re-introduced
-// when those phases land. The protocol-facing code below is byte-compatible
-// with the 1.x implementation.
+// projections (P4, skipped in this migration). The P2 chronicle feed IS
+// wired (observeParsedGameDataForChronicle on the conversation path in
+// main.ts); only the agency-side integration remains omitted. The
+// protocol-facing code below is byte-compatible with the 1.x implementation.
 
 type IncomingLetterType =
     | 'vassal_memorial' | 'siege_report' | 'lost_holding' | 'family_letter' | 'poetry_letter'

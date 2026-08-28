@@ -85,9 +85,10 @@ function expectInitProducerTail(tail: string[]): void {
 //   data[8]     checkpoint epoch; data[9..14] nodeA/nodeB/parentA/
 //               parentB/checkpointToken/pendingCheckpointToken
 //   data[15..22] the 8-field protocol tail
-//   data[23]    debug save-snapshot protocol read placeholder (single field;
-//               mod2 ce never writes the variable, so it parses as 0)
-// Unlike mod1 there is NO date-extra block and NO conversation session tail.
+//   data[23..27] date-extra five-pack (P5)
+//   data[28..30] save-snapshot protocol/sequence/slot (P5; non-debug writes 0/0/0)
+// No conversation-session tail on these three emitters (the incoming-letter
+// emitter carries one as fields 31..35; the parser ignores extras).
 const INIT_TAIL_START_INDEX = INIT_CORE_FIELD_COUNT;
 // P5: the save-snapshot placeholder grew into the date-extra five-pack plus
 // the protocol/sequence/slot triple (see saveSnapshotProtocol.ts indices

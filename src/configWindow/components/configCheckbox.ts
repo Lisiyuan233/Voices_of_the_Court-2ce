@@ -71,11 +71,18 @@ class ConfigCheckbox extends HTMLElement{
         let value: any = config;
         for (const part of parts) {
             if (value === undefined || value === null) {
-                return true;
+                return this.defaultFor(confID);
             }
             value = value[part];
         }
-        return value !== undefined ? value : true;
+        return value !== undefined ? value : this.defaultFor(confID);
+    }
+
+    // Audit L7: a missing saveFacts.* path must render OFF to match the
+    // buildSaveFactSettings defaults; everything else keeps the legacy
+    // checked-by-default behaviour.
+    private defaultFor(confID: string): boolean {
+        return confID.startsWith('saveFacts.') ? false : true;
     }
 
     public updateTranslation(key?: string) {

@@ -68,7 +68,7 @@ describe('formatMilitaryBrief', () => {
         expect(brief).toContain('War #101: War of succession.');
         expect(brief).toContain('Our side is the attacker.');
         expect(brief).toContain('we hold a clear advantage');
-        expect(brief).toContain('Occupation advantage');
+        expect(brief).toContain('Occupation: some advantage');
         expect(brief).toContain('Target: France.');
         expect(brief).toContain('[Data limits:');
     });
@@ -80,7 +80,7 @@ describe('formatMilitaryBrief', () => {
 
         // score.total 65 attacker-perspective -> -65 for the defender
         expect(brief).toContain('we are at a clear disadvantage');
-        expect(brief).toContain('Field battles disadvantage');
+        expect(brief).toContain('Field battles: significant disadvantage');
     });
 
     it('renders the Chinese table for zh, including attendee role labels', () => {

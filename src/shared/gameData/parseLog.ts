@@ -132,7 +132,7 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
         }
 
         if(line.includes("VOTC:IN")){
-            //0: VOTC:IN, 1: dataType, 3: rootID 4...: data
+            //0: VOTC:IN, 1: dataType, 2: rootID 3...: data
             // Lines may end with "/;" when the template's last field is empty (e.g. laws); normalize so split yields a clean trailing element.
             const splittableLine = line.endsWith("/;") ? `${line}/` : line;
             let data = splittableLine.split("/;/")
@@ -888,42 +888,38 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
  * blocks, not necessarily in the block a caller just parsed). Locates the
  * last `VOTC:IN/;/military_snapshot/` line, bounds the block at the next
  * `VOTC:IN/;/init` line (or EOF) and reuses the regular parser over that
- * byte range. Returns undefined when no complete snapshot exists.
+ * snapshotRange. Returns undefined when the most recent snapshot block is
+ * missing or incomplete (earlier blocks are not retried).
+ *
+ * All offsets are computed in whole-file STRING space (audit H2 fix): the
+ * file is read once as UTF-8 and every index handed to parseLog comes from
+ * that same string, so multibyte (CJK) content cannot shift the range the
+ * way a byte-window + string-index mix would.
  */
 export async function readLastMilitarySnapshotFromLog(debugLogPath: string): Promise<MilitarySnapshot | undefined> {
     const START = 'VOTC:IN/;/military_snapshot/';
     const END = 'VOTC:IN/;/init';
-    const SCAN_BYTES = 4 * 256 * 1024; // military snapshot blocks are compact; a 1MB tail is generous
-    let handle;
     try {
         if (!fs.existsSync(debugLogPath)) return undefined;
-        handle = await fs.promises.open(debugLogPath, 'r');
-        const { size } = await handle.stat();
-        const readStart = Math.max(0, size - SCAN_BYTES);
-        const len = size - readStart;
-        const buffer = Buffer.alloc(len);
-        await handle.read(buffer, 0, len, readStart);
-        const content = buffer.toString('utf8');
+        const content = await fs.promises.readFile(debugLogPath, 'utf8');
 
         const startIdx = content.lastIndexOf(START);
         if (startIdx === -1) return undefined;
-        const absStart = readStart + Math.max(0, content.lastIndexOf('\n', startIdx) + 1);
+        const rangeStart = Math.max(0, content.lastIndexOf('\n', startIdx) + 1);
 
-        let endAbs = size;
+        let rangeEnd = content.length;
         const endIdx = content.indexOf(END, startIdx + START.length);
         if (endIdx !== -1) {
-            endAbs = readStart + Math.max(0, content.lastIndexOf('\n', endIdx) + 1);
+            rangeEnd = Math.max(0, content.lastIndexOf('\n', endIdx) + 1);
         }
-        if (endAbs <= absStart) return undefined;
+        if (rangeEnd <= rangeStart) return undefined;
 
-        const gameData = await parseLog(debugLogPath, { startOffset: absStart, endOffset: endAbs });
+        const gameData = await parseLog(debugLogPath, { startOffset: rangeStart, endOffset: rangeEnd });
         const snapshot = gameData?.militarySnapshot;
         return snapshot?.complete ? snapshot : undefined;
     } catch (err) {
         console.error(`[parseLog] readLastMilitarySnapshotFromLog failed: ${err}`);
         return undefined;
-    } finally {
-        if (handle) await handle.close();
     }
 }
 

@@ -1963,6 +1963,34 @@ ipcRenderer.on('error-message', (e, errorMessage: string) =>{
     displayErrorMessage(errorMessage);
 })
 
+// P5 save-facts snapshot status (audit L3): non-modal indicator for the
+// snapshot wait. Loading persists during the wait; a fallback convergence
+// flashes briefly; available/disabled never show anything.
+ipcRenderer.on('save-facts-status', (e, status: { state: string; code?: string; factCount?: number }) => {
+    const el = document.getElementById('save-facts-status');
+    if (!el) return;
+    // @ts-ignore
+    const lm = window.LocalizationManager;
+    const translate = (key: string, fallback: string) =>
+        (lm ? lm.getNestedTranslation(key) : null) || fallback;
+    let hideDelayMs: number | null = null;
+    if (status.state === 'loading') {
+        el.innerText = translate('chat.save_facts_loading', 'Reading save-game facts...');
+    } else if (status.state === 'fallback') {
+        el.innerText = translate('chat.save_facts_fallback', 'Save facts unavailable; continuing without them.') + (status.code ? ` (${status.code})` : '');
+        hideDelayMs = 6000;
+    } else if (status.state === 'unsupported') {
+        el.innerText = translate('chat.save_facts_unsupported', 'Save format not supported; save facts disabled.') + (status.code ? ` (${status.code})` : '');
+        hideDelayMs = 6000;
+    }
+    if (hideDelayMs === null) {
+        el.style.display = status.state === 'loading' ? 'block' : 'none';
+    } else {
+        el.style.display = 'block';
+        window.setTimeout(() => { el.style.display = 'none'; }, hideDelayMs);
+    }
+});
+
 ipcRenderer.on('generation-cancelled', () => {
     removeLoadingDots();
     const messageDiv = document.createElement('div');

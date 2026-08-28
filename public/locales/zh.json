@@ -133,7 +133,9 @@
     "mod_elder_kings_2": "上古卷轴：君王2",
     "total_tokens_header": "总令牌数",
     "total_conversation_tokens": "总对话令牌数：",
-    "total_letter_tokens": "总信件令牌数："
+    "total_letter_tokens": "总信件令牌数：",
+    "chroniclePrompt": "编年史提示词",
+    "chroniclePrompt_tooltip": "宫廷史官生成编年史条目时使用的系统提示词模板。"
   },
   "battleReport": {
     "refresh": "刷新",
@@ -202,7 +204,34 @@
     "instruct_header": "指令设置",
     "input_seq": "输入序列",
     "output_seq": "输出序列",
-    "text_gen_params": "文本生成参数"
+    "text_gen_params": "文本生成参数",
+    "chronicleTitle": "宫廷史官",
+    "chronicleFrequency": "编年史频率",
+    "chronicleFrequency.disabled": "禁用",
+    "chronicleFrequency.quarterly": "每季度",
+    "chronicleFrequency.yearly": "每年",
+    "chronicleRawSourceCharLimit": "原始素材字符上限",
+    "chronicleOutputMaxTokens": "编年史输出 token 上限",
+    "saveFactsTitle": "存档事实（实验性）",
+    "saveFactsParsing": "启用存档快照解析",
+    "saveFactsParser": "允许运行存档解析助手",
+    "saveFactsPrompt": "将已验证事实注入提示词",
+    "saveFactsDiagnostics": "允许诊断视图",
+    "saveFactsPrivacyNote": "隐私说明",
+    "saveFactsPrivacyNoteText": "快照读取自本 mod 写出的存档文件（save games/votc_context.ck3）。它不会离开你的电脑；只有衍生的事实行会作为提示词的一部分发送给你配置的 LLM 服务。除非你在此启用，以上功能保持关闭。",
+    "chronicleFrequency_tooltip": "宫廷史官撰写编年史条目的频率。禁用即关闭自动生成。",
+    "chronicleRawSourceCharLimit_tooltip": "发送给模型的原始素材总字符数上限。",
+    "chronicleOutputMaxTokens_tooltip": "生成的编年史条目的最大 token 数。",
+    "saveFactsParsing_tooltip": "读取本 mod 写出的结构化存档快照（家族、领地、战争、宫廷）作为已验证事实使用。需要以 -debug_mode 启动游戏；关闭时应用绝不接触存档文件。",
+    "saveFactsParser_tooltip": "允许对快照文件运行内置的存档解析助手。需要先打开上方的主开关。",
+    "saveFactsPrompt_tooltip": "把已验证的存档事实作为有预算上限的 game_facts 块注入对话提示词。需要先打开上方两个开关。",
+    "saveFactsDiagnostics_tooltip": "仅向本设置窗口暴露匿名的存档事实诊断信息（状态码与分类计数）。",
+    "chronicleFrequency_disabled": "禁用",
+    "chronicleFrequency_quarterly": "每季度",
+    "chronicleFrequency_yearly": "每年",
+    "settings": {
+      "saveFactsViewDiagnostics": "查看诊断信息"
+    }
   },
   "system": {
     "update": "更新",
@@ -278,7 +307,10 @@
     "edit_tooltip": "按 Enter 或在编辑框外单击以保存，按 Escape 取消。支持标准的 Ctrl+Z/Cmd+Z 撤消操作。",
     "cancel_button": "取消",
     "cancel_response_tooltip": "取消当前AI响应生成。",
-    "generation_cancelled": "用户已取消生成。"
+    "generation_cancelled": "用户已取消生成。",
+    "save_facts_loading": "正在读取存档事实…",
+    "save_facts_fallback": "存档事实不可用，继续对话。",
+    "save_facts_unsupported": "存档格式不受支持，存档事实已停用。"
   },
   "narrative": {
     "fallback_prompt": "请根据以下对话内容生成一段简短的旁白，描述场景氛围或角色的内心感受。旁白应该简洁、生动，长度控制在50-100字之间。",
@@ -900,16 +932,5 @@
     "description_label": "当前对话信息：",
     "system_prompt": "你是一个场景描述生成助手，负责为角色扮演游戏创建生动的场景氛围描述。",
     "fallback_description": "在{{date}}，{{playerName}}和{{aiName}}在{{location}}开始了一段对话。"
-  },
-  "settings.saveFactsTitle": "存档事实（实验性）",
-  "settings.saveFactsParsing": "启用存档快照解析",
-  "settings.saveFactsParsing.tooltip": "读取本 mod 写出的结构化存档快照（家族、领地、战争、宫廷）作为已验证事实使用。需要以 -debug_mode 启动游戏；关闭时应用绝不接触存档文件。",
-  "settings.saveFactsPrompt": "将已验证事实注入提示词",
-  "settings.saveFactsPrompt.tooltip": "把已验证的存档事实作为有预算上限的 game_facts 块注入对话提示词。",
-  "settings.saveFactsDiagnostics": "允许诊断视图",
-  "settings.saveFactsDiagnostics.tooltip": "仅向本设置窗口暴露匿名的存档事实诊断信息（状态码与分类计数）。",
-  "settings.saveFactsPrivacyNote": "隐私说明",
-  "settings.saveFactsPrivacyNoteText": "快照读取自本 mod 写出的存档文件（save games/votc_context.ck3）。它不会离开你的电脑；只有衍生的事实行会作为提示词的一部分发送给你配置的 LLM 服务。除非你在此启用，以上功能保持关闭。",
-  "settings.saveFactsParser": "允许运行存档解析助手",
-  "settings.saveFactsParser.tooltip": "允许对快照文件运行内置的存档解析助手。需要先打开上方的主开关。"
+  }
 }

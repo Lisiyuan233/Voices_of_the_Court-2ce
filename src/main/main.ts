@@ -958,6 +958,10 @@ let conversation: Conversation;
 let saveSnapshotCoordinator: SaveSnapshotCoordinator | undefined;
 let lastSaveFactDiagnostics: ReturnType<typeof buildSaveFactDiagnosticsDto> | null = null;
 let conversationStartGeneration = 0;
+// P5 (1.x Task 16 step 2 parity): abort the previous start's snapshot wait so
+// a superseded prepare cannot occupy the coordinator queue for up to the full
+// deadline while the new conversation waits behind it.
+let conversationStartAbort: AbortController | null = null;
 
 interface SaveFactUiStatus {
     state: 'loading' | 'available' | 'disabled' | 'fallback' | 'unsupported';
@@ -1017,18 +1021,32 @@ function initializeSaveSnapshotCoordinator(): void {
             getTimelineContext: (gameData, identity) => {
                 // Best-effort: without a registry the cache lookup still runs
                 // and checkpoint provenance falls back to the GameData epoch.
+                // Campaign-scoped registries first (audit M3, mirroring the
+                // diary path): the legacy player-scoped store only holds
+                // pre-v2 data, so reads against it would silently miss every
+                // campaign-scoped node.
                 try {
-                    const registry = loadRegistryForContext(app.getPath('userData'), buildContextFromGameData(gameData));
-                    if (!registry) {
-                        return undefined;
+                    const context = buildContextFromGameData(gameData);
+                    let registry: TimelineRegistry;
+                    if (context.identity) {
+                        const migrationResult = loadCampaignStoreWithMigration(
+                            app.getPath('userData'),
+                            context.identity,
+                            { observedState: observedStateFromContext(context) }
+                        );
+                        registry = migrationResult.loadResult.status === 'found'
+                            ? migrationResult.loadResult.store
+                            : new TimelineRegistry(identity.playerId);
+                    } else {
+                        registry = loadRegistryForContext(app.getPath('userData'), context);
                     }
-                    const timeline = resolveTimelineContext(registry, buildContextFromGameData(gameData));
-                    const context: SaveFactTimelineContext = {
+                    const resolved = resolveTimelineContext(registry, context);
+                    const timelineContext: SaveFactTimelineContext = {
                         registry,
-                        currentNodeId: timeline.timelineNodeId,
-                        checkpointEpoch: timeline.checkpointEpoch ?? gameData.votcCheckpointEpoch
+                        currentNodeId: resolved.timelineNodeId,
+                        checkpointEpoch: resolved.checkpointEpoch ?? gameData.votcCheckpointEpoch
                     };
-                    return context;
+                    return timelineContext;
                 } catch (error) {
                     console.warn('[save-facts] timeline context unavailable; proceeding without a registry:', error);
                     return undefined;
@@ -1050,6 +1068,9 @@ clipboardListener.on('VOTC:IN', async () =>{
     // a stale handler whose prepare resolves late must never construct the
     // conversation.
     const startGeneration = ++conversationStartGeneration;
+    conversationStartAbort?.abort();
+    const startAbort = new AbortController();
+    conversationStartAbort = startAbort;
 
     // Check for incompatible mods
     const dlcLoadPath = path.join(config.userFolderPath, 'dlc_load.json');
@@ -1136,7 +1157,8 @@ clipboardListener.on('VOTC:IN', async () =>{
             ? await saveSnapshotCoordinator.prepare(gameData, {
                 appUserDataDir: app.getPath('userData'),
                 settings: saveFactSettings,
-                startGeneration
+                startGeneration,
+                signal: startAbort.signal
             })
             : createEmptyConversationFactContext('disabled');
 

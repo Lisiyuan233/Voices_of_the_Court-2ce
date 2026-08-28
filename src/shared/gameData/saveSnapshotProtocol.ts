@@ -11,6 +11,10 @@ export const SAVE_SNAPSHOT_PROTOCOL_VERSION = 1;
 export const INIT_SAVE_SNAPSHOT_EXTRA_START_INDEX = INIT_DATE_EXTRA_START_INDEX + INIT_DATE_EXTRA_FIELD_COUNT;
 export const INIT_SAVE_SNAPSHOT_EXTRA_FIELD_COUNT = 3;
 
+// Fields 31..35 of some mod init lines carry a conversation-session tail
+// (magic/session token/roster revision/capacity/active flag). This parser
+// intentionally ignores them; nothing in 2CE consumes session extras yet
+// (audit L11b).
 export const SAVE_SNAPSHOT_MIN_SLOT = 0;
 export const SAVE_SNAPSHOT_MAX_SLOT = 1;
 

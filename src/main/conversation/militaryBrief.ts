@@ -270,9 +270,13 @@ export function formatMilitaryBrief(snapshot: MilitarySnapshot | undefined | nul
     function describeRelativeComponent(value: number, playerSide: WarSide, label: string): string {
         const signedValue = playerSide === 'attacker' ? value : -value;
         const magnitude = describeComponent(Math.abs(signedValue));
-        if (magnitude === t.componentNone) return `${label}${t.componentNone}`;
-        const direction = signedValue > 0 ? t.advantage : t.disadvantage;
-        return `${label}${direction}${magnitude}`;
+        if (lang === 'zh') {
+            // 1.x parity: 野战交锋无 / 野战交锋优势些许
+            if (magnitude === t.componentNone) return `${label}${t.componentNone}`;
+            return `${label}${signedValue > 0 ? '优势' : '劣势'}${magnitude}`;
+        }
+        if (magnitude === t.componentNone) return `${label}: none`;
+        return `${label}: ${magnitude} ${signedValue > 0 ? 'advantage' : 'disadvantage'}`;
     }
 
     output += t.header(snapshot.snapshotDate);
@@ -343,10 +347,12 @@ export function formatMilitaryBrief(snapshot: MilitarySnapshot | undefined | nul
         const score = war.score;
         const signedTotal = war.playerSide === 'attacker' ? score.total : -score.total;
         const partDescs: string[] = [];
-        if (score.battles !== undefined && score.battles !== 0) {
+        // 1.x parity: battles/occupation render whenever defined (0 shows the
+        // explicit "none" degree); imprisonment/ticking stay 0-suppressed.
+        if (score.battles !== undefined) {
             partDescs.push(helpers.describeRelativeComponent(score.battles, war.playerSide, table.componentLabels.battles));
         }
-        if (score.occupation !== undefined && score.occupation !== 0) {
+        if (score.occupation !== undefined) {
             partDescs.push(helpers.describeRelativeComponent(score.occupation, war.playerSide, table.componentLabels.occupation));
         }
         if (score.imprisonment !== undefined && score.imprisonment !== 0) {
