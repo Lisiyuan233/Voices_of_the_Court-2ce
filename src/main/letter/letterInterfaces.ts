@@ -26,6 +26,13 @@ export interface Letter {
   expectedDeliveryDate?: Date;
   isPlayerSender?: boolean;
   votcCheckpointEpoch?: number;
+  /**
+   * Guarded CK3 timeline commit block (buildLetterTimelineBlock output) for
+   * this reply, built at generation time and persisted with the letter
+   * history so a delivery after an app restart still carries it. Spliced
+   * into the letters.txt payload by LetterManager.deliverLetter.
+   */
+  timelineRunBlock?: string;
   characterContext?: {
     playerId: string;
     playerName: string;

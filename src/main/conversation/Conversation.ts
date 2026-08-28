@@ -16,7 +16,8 @@ import { generateSceneDescription } from './sceneDescriptionBuilder.js';
 import { generateNarrative } from './generateNarrative.js';
 import { cleanMessageContent } from './messageCleaner.js';
 import { DiaryGenerator } from '../diary/DiaryGenerator.js';
-import { readDiaryFile, saveDiaryFile, readDiarySummaries, saveDiarySummaries } from '../diaryManager.js';
+import { readDiaryFile, saveDiaryFile, readDiarySummaries, saveDiarySummaries, archiveFutureDiaryRecordsForPlayer } from '../diaryManager.js';
+import type { DiaryTimelineStamp } from '../ts/diary_interfaces.js';
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
@@ -230,6 +231,9 @@ export class Conversation{
         
         // Archive future summaries for the current checkpoint epoch
         archiveFutureSummaryFilesForPlayer(this.userDataPath, String(this.gameData.playerID), this.gameData.votcCheckpointEpoch, 'conversation_open_checkpoint_filter');
+        // Same trigger for diary records (timeline v2): a save rollback leaves
+        // future-epoch diary entries/summaries behind; archive rather than delete.
+        archiveFutureDiaryRecordsForPlayer(String(this.gameData.playerID), this.gameData.votcCheckpointEpoch, 'conversation_open_checkpoint_filter');
 
         // Load summaries for all non-player characters
         this.gameData.characters.forEach((character) => {
@@ -1724,6 +1728,12 @@ ${timelineLines}
         const nextCheckpointEpoch = this.gameData.votcCheckpointEpoch + 1;
         this.cancelGeneration(); // Cancel any ongoing generation.
 
+        // Timeline node created at close time (undefined for legacy-mod
+        // sessions or when the transition failed). Hoisted out of the
+        // try/finally below so the diary stamping can anchor new entries to
+        // the same node/epoch as the close checkpoint.
+        let timeline: CreateChildNodeResult | undefined;
+
         // §9.3 P5.4 fix C1: wrap the close-request lifecycle in try/finally so
         // the stored requestKey UUID is cleared regardless of outcome (success,
         // fail-closed identity error, or unexpected throw). Idempotent.
@@ -1731,7 +1741,6 @@ ${timelineLines}
             // §4.1: capture the campaign identity captured at conversation
             // start; §9: fail closed when it is missing (legacy Mod) - do NOT
             // fall back to a player-only timeline write.
-            let timeline: CreateChildNodeResult | undefined;
             try {
                 if (!this.campaignIdentity) {
                     throw new CampaignIdentityUnavailableError(
@@ -1792,7 +1801,17 @@ ${timelineLines}
             this.clearCloseRequestKey();
         }
 
-        // Generate and save diary entries for each character
+        // Generate and save diary entries for each character.
+        // Timeline v2 stamping: the close transition advances the checkpoint,
+        // so diary records are anchored to the NEW node/epoch (the checkpoint
+        // they become part of). When the transition failed or the mod is
+        // legacy, the stamp degrades to epoch-only (legacy visibility).
+        const diaryStamp: DiaryTimelineStamp = {
+            votcCheckpointEpoch: nextCheckpointEpoch,
+            ...(timeline ? { votcTimelineNodeId: timeline.nodeId } : {}),
+            ...(timeline?.parentId ? { votcTimelineParentId: timeline.parentId } : {}),
+            ...(this.campaignIdentity ? { votcCampaignId: this.campaignIdentity.campaignId } : {})
+        };
         for (const character of this.gameData.characters.values()) {
             // @ts-ignore - diaryGenerationChance is a custom property we added
             const diaryChance = this.config.diaryGenerationChance / 100;
@@ -1802,7 +1821,7 @@ ${timelineLines}
                 if (wasInvolvedInAction) {
                     console.log(`Forcing diary entry for ${character.shortName} due to action involvement.`);
                 }
-                const newDiaryEntry = await this.diaryGenerator.generateDiaryEntry(this.gameData, this, character.id.toString(), nextCheckpointEpoch);
+                const newDiaryEntry = await this.diaryGenerator.generateDiaryEntry(this.gameData, this, character.id.toString(), diaryStamp);
                 if (newDiaryEntry) {
                     await saveDiaryFile(this.gameData.playerID.toString(), character.id.toString(), newDiaryEntry);
                     
@@ -1810,7 +1829,7 @@ ${timelineLines}
                     const summaryResult = await this.diaryGenerator.summarizeDiaryEntry(newDiaryEntry, this.gameData);
                     if (summaryResult) {
                         const summaries = await readDiarySummaries(this.gameData.playerID.toString(), character.id.toString());
-                        summaries.unshift({ id: randomUUID(), ...summaryResult, votcCheckpointEpoch: nextCheckpointEpoch });
+                        summaries.unshift({ id: randomUUID(), ...summaryResult, ...diaryStamp });
                         await saveDiarySummaries(this.gameData.playerID.toString(), character.id.toString(), summaries);
                     }
                 }
@@ -1931,6 +1950,8 @@ ${timelineLines}
 
         // Archive future summaries before saving new ones with the next checkpoint epoch
         archiveFutureSummaryFilesForPlayer(this.userDataPath, String(this.gameData.playerID), nextCheckpointEpoch, 'conversation_summary_save_checkpoint_filter');
+        // Diary records written after a save rollback are archived the same way.
+        archiveFutureDiaryRecordsForPlayer(String(this.gameData.playerID), nextCheckpointEpoch, 'conversation_close_checkpoint_filter');
 
         for (const character of this.gameData.characters.values()) {
             if (character.id === this.gameData.playerID) continue;

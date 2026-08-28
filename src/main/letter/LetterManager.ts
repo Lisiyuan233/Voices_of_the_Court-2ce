@@ -8,6 +8,7 @@ import { randomUUID } from 'crypto';
 import { Config } from '../../shared/Config.js';
 import { parseLettersFromLog } from './parseLogForLetters.js';
 import { filterSummariesForCheckpoint } from '../summaryManager.js';
+import { buildLetterDeliveryPayload, buildLegacyLetterDeliveryPayload } from './letterRunScript.js';
 
 export class LetterManager {
     private static instance: LetterManager;
@@ -309,44 +310,35 @@ export class LetterManager {
             console.error("Cannot deliver letter, user folder path is not set.");
             return;
         }
-    
+
         const letter = storedLetter.originalLetter;
         const replyContent = storedLetter.letter.content;
         const letterId = letter.subject; // This is 'letter_5' etc.
-    
+
         const runFolderPath = path.join(userFolderPath, "run");
         if (!fs.existsSync(runFolderPath)) {
             fs.mkdirSync(runFolderPath, { recursive: true });
         }
-    
+
         const letterFilePath = path.join(runFolderPath, "letters.txt");
-    
+
         const escapedReply = replyContent.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        
-        const gameCommand = `debug_log = "[Localize('talk_event.9999.desc')]"
-remove_global_variable ?= votc_${letterId}
-create_artifact = {
-\tname = votc_huixin_title${letterId.replace(/letter_/, "")}
-\tdescription = "${escapedReply}"
-\ttype = journal
-\tvisuals = scroll
-\tcreator = global_var:message_second_scope_${letterId}
-\tmodifier = artifact_monthly_minor_prestige_1_modifier
-\twealth = scope:wealth
-\tsave_scope_as = votc_latest_letter
-}
-if = {
-\tlimit = { exists = scope:votc_latest_letter }
-\tscope:votc_latest_letter = {
-\t\tset_variable = { name = votc_letter_artifact value = yes}
-\t}
-\tset_global_variable = {
-\t\tname = votc_latest_letter
-\t\tvalue = scope:votc_latest_letter
-\t}
-}
-trigger_event = message_event.362`;
-    
+
+        // Thread-scheme letters ('letter_1'..'letter_9') get the guarded
+        // payload: the timeline commit block persisted on the reply is spliced
+        // in so the save receives the letter's node/epoch/token at delivery,
+        // and the thread guard makes the letters_runner poll repeats inert.
+        // Letters outside the scheme keep the legacy unguarded payload.
+        const slotMatch = letterId.match(/^letter_([1-9])$/);
+        const gameCommand = slotMatch
+            ? buildLetterDeliveryPayload({
+                letterNumber: slotMatch[1],
+                deliveryId: Number.isSafeInteger(letter.totalDays) && letter.totalDays >= 0 ? letter.totalDays : 0,
+                escapedReply,
+                timelineBlock: storedLetter.letter.timelineRunBlock
+            })
+            : buildLegacyLetterDeliveryPayload(letterId, escapedReply);
+
         fs.writeFileSync(letterFilePath, '\uFEFF' + gameCommand, 'utf8');
         console.log(`Delivered letter ${letter.id} by writing to: ${letterFilePath}`);
     }

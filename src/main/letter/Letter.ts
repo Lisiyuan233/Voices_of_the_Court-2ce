@@ -20,6 +20,8 @@ export class Letter implements ILetter {
     deliveryTimestamp?: Date;
     expectedDeliveryDate?: Date;
     votcCheckpointEpoch?: number;
+    /** See Letter.timelineRunBlock in letterInterfaces.ts. */
+    timelineRunBlock?: string;
 
     constructor(
         id: string,

@@ -5,7 +5,7 @@ import { GameData, Trait } from "../../shared/gameData/GameData";
 import { Config } from "../../shared/Config";
 import { Message } from "../ts/conversation_interfaces";
 import { Conversation } from "../conversation/Conversation";
-import { DiaryEntry } from "../ts/diary_interfaces";
+import { DiaryEntry, DiaryTimelineStamp } from "../ts/diary_interfaces";
 import { LetterManager } from "../letter/LetterManager";
 import { randomUUID } from "crypto";
 import * as path from "path";
@@ -59,7 +59,7 @@ export class DiaryGenerator {
         return prompt;
     }
 
-    public async generateDiaryEntry(gameData: GameData, conversation: Conversation, characterId: string, checkpointEpoch: number = gameData.votcCheckpointEpoch): Promise<DiaryEntry | null> {
+    public async generateDiaryEntry(gameData: GameData, conversation: Conversation, characterId: string, stamp: DiaryTimelineStamp = {}): Promise<DiaryEntry | null> {
         const character = gameData.characters.get(parseInt(characterId));
         if (!character) {
           return null;
@@ -100,13 +100,16 @@ export class DiaryGenerator {
             return acc;
           }, {}),
           creationTimestamp: new Date(),
-          votcCheckpointEpoch: checkpointEpoch
+          votcCheckpointEpoch: stamp.votcCheckpointEpoch ?? gameData.votcCheckpointEpoch,
+          ...(stamp.votcTimelineNodeId ? { votcTimelineNodeId: stamp.votcTimelineNodeId } : {}),
+          ...(stamp.votcTimelineParentId ? { votcTimelineParentId: stamp.votcTimelineParentId } : {}),
+          ...(stamp.votcCampaignId ? { votcCampaignId: stamp.votcCampaignId } : {})
         };
 
         return diaryEntry;
     }
 
-    public async generateDiaryEntryForLetter(gameData: GameData, character: Character, letterContent: string, letterDirection: 'sent' | 'received'): Promise<DiaryEntry | null> {
+    public async generateDiaryEntryForLetter(gameData: GameData, character: Character, letterContent: string, letterDirection: 'sent' | 'received', stamp: DiaryTimelineStamp = {}): Promise<DiaryEntry | null> {
         const diaryPrompt = getEffectivePrompts(this.config, this.userDataPath, gameData).diaryForLetterPrompt;
         if (!diaryPrompt) return null;
 
@@ -134,7 +137,10 @@ export class DiaryGenerator {
                 return acc;
             }, {}),
             creationTimestamp: new Date(),
-            votcCheckpointEpoch: gameData.votcCheckpointEpoch
+            votcCheckpointEpoch: stamp.votcCheckpointEpoch ?? gameData.votcCheckpointEpoch,
+            ...(stamp.votcTimelineNodeId ? { votcTimelineNodeId: stamp.votcTimelineNodeId } : {}),
+            ...(stamp.votcTimelineParentId ? { votcTimelineParentId: stamp.votcTimelineParentId } : {}),
+            ...(stamp.votcCampaignId ? { votcCampaignId: stamp.votcCampaignId } : {})
         };
     }
 

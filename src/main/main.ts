@@ -25,7 +25,7 @@ import { waitForChronicleMemoryBlock, blockRecordToObservationInputs, type Chron
 import type { ChronicleSignal, ChronicleCoordinatorConfig } from "./chronicle/chronicleTypes.js";
 import { requireCampaignIdentity } from "./campaignIdentityResolver.js";
 import type { CampaignPlayerIdentity } from "../shared/gameData/CampaignIdentity.js";
-import { buildTimelineContextFromParts, resolveTimelineContext, type TimelineRegistry } from "./timelineManager.js";
+import { buildContextFromGameData, buildTimelineContextFromParts, loadRegistryForContext, resolveTimelineContext, TimelineRegistry } from "./timelineManager.js";
 import { loadCampaignStoreWithMigration, observedStateFromContext } from "./campaignBusiness.js";
 import { LetterManager } from "./letter/LetterManager.js";
 import { BattleReportGenerator } from "./battleReport/BattleReportGenerator.js";
@@ -34,7 +34,7 @@ import { parseLettersFromLog } from "./letter/parseLogForLetters.js";
 import { parseLogForBookmarks } from "./parseLogforbookmarks.js";
 import { processBookmarkToSummary } from "./bookmarktosummary.js";
 import { getPlayerId, getAllPlayerIds, readSummaryFile, saveSummaryFile, readCharacterMap, saveCharacterMap } from "./summaryManager.js";
-import { parseDiaryIdsFromLog, getAllDiaryPlayerIds, getDiaryFiles, readDiaryFile, saveDiaryFile, getCharacterMap as getDiaryCharacterMap, readDiarySummaries, saveDiarySummaries, getAllDiarySummaries } from "./diaryManager.js";
+import { parseDiaryIdsFromLog, getAllDiaryPlayerIds, getDiaryFiles, readDiaryFile, saveDiaryFile, getCharacterMap as getDiaryCharacterMap, readDiarySummaries, saveDiarySummaries, getAllDiarySummaries, archiveFutureDiaryRecordsForPlayer, saveAllDiarySummariesMerged, type DiaryVisibilityContext } from "./diaryManager.js";
 import { registerTimelineIpc, resolveTimelineWindowRequest } from "./ipc/timelineIpc.js";
 import type { TimelineWindowContext } from "./managerClipboardPayload.js";
 import { decideManagerWindowContext } from "./managerClipboardPayload.js";
@@ -1333,17 +1333,37 @@ clipboardListener.on('VOTC:LETTER', async () => {
         const letterReplyGenerator = new LetterReplyGenerator(config, userDataPath);
         const replyLetter = await letterReplyGenerator.generateLetterReply(gameData, latestLetter);
 
+        // Timeline v2 stamp for letter-flow diary records. Unlike the
+        // conversation-close flow (which advances the checkpoint and stamps
+        // the NEW node/epoch), the letter flow does not advance the
+        // checkpoint, so records anchor to the CURRENT node/epoch from the
+        // game-data snapshot. Legacy mod / unparsable snapshot -> epoch-only.
+        let letterDiaryStamp: { votcCheckpointEpoch: number; votcTimelineNodeId?: string; votcTimelineParentId?: string; votcCampaignId?: string } = {
+            votcCheckpointEpoch: gameData.votcCheckpointEpoch
+        };
+        try {
+            const letterTimelineContext = buildContextFromGameData(gameData);
+            letterDiaryStamp = {
+                votcCheckpointEpoch: gameData.votcCheckpointEpoch,
+                ...(letterTimelineContext.timelineNodeId ? { votcTimelineNodeId: letterTimelineContext.timelineNodeId } : {}),
+                ...(letterTimelineContext.timelineParentId ? { votcTimelineParentId: letterTimelineContext.timelineParentId } : {}),
+                ...(letterTimelineContext.identity ? { votcCampaignId: letterTimelineContext.identity.campaignId } : {})
+            };
+        } catch (error) {
+            console.error('Failed to build timeline context for letter diary stamping; using epoch-only stamp:', error);
+        }
+
         // Diary entry for player sending a letter
         if (config.diaryGenerationChance > 0 && Math.random() < (config.diaryGenerationChance / 100)) {
             const playerCharacter = gameData.getCharacter(gameData.playerID);
             if (playerCharacter) {
-                const newEntry = await diaryGenerator.generateDiaryEntryForLetter(gameData, playerCharacter, latestLetter.content, 'sent');
+                const newEntry = await diaryGenerator.generateDiaryEntryForLetter(gameData, playerCharacter, latestLetter.content, 'sent', letterDiaryStamp);
                 if (newEntry) {
                     await saveDiaryFile(String(gameData.playerID), String(playerCharacter.id), newEntry);
                     const summaryResult = await diaryGenerator.summarizeDiaryEntry(newEntry, gameData);
                     if (summaryResult) {
                         const summaries = await readDiarySummaries(String(gameData.playerID), String(playerCharacter.id));
-                        summaries.unshift({ id: randomUUID(), ...summaryResult, votcCheckpointEpoch: gameData.votcCheckpointEpoch });
+                        summaries.unshift({ id: randomUUID(), ...summaryResult, ...letterDiaryStamp });
                         await saveDiarySummaries(String(gameData.playerID), String(playerCharacter.id), summaries);
                     }
                 }
@@ -1369,13 +1389,13 @@ clipboardListener.on('VOTC:LETTER', async () => {
         if (config.diaryGenerationChance > 0 && Math.random() < (config.diaryGenerationChance / 100)) {
             const aiCharacter = gameData.getCharacter(replyLetter.sender.id);
             if (aiCharacter) {
-                const newEntry = await diaryGenerator.generateDiaryEntryForLetter(gameData, aiCharacter, replyLetter.content, 'received');
+                const newEntry = await diaryGenerator.generateDiaryEntryForLetter(gameData, aiCharacter, replyLetter.content, 'received', letterDiaryStamp);
                 if (newEntry) {
                     await saveDiaryFile(String(gameData.playerID), String(aiCharacter.id), newEntry);
                     const summaryResult = await diaryGenerator.summarizeDiaryEntry(newEntry, gameData);
                     if (summaryResult) {
                         const summaries = await readDiarySummaries(String(gameData.playerID), String(aiCharacter.id));
-                        summaries.unshift({ id: randomUUID(), ...summaryResult, votcCheckpointEpoch: gameData.votcCheckpointEpoch });
+                        summaries.unshift({ id: randomUUID(), ...summaryResult, ...letterDiaryStamp });
                         await saveDiarySummaries(String(gameData.playerID), String(aiCharacter.id), summaries);
                     }
                 }
@@ -2093,10 +2113,79 @@ ipcMain.handle('save-all-letter-summaries', async (event, playerId: string, summ
 });
 
 // Diary Summary IPC handlers
-ipcMain.handle('get-all-diaries-for-player', async (event, playerId: string) => {
+//
+// Timeline v2 visibility context for diary reads/writes. Diary storage stays
+// player-scoped (P6); the context is resolved per call. A live conversation's
+// game data carries the exact current checkpoint evidence (node, epoch,
+// campaign identity) and is preferred; otherwise fall back to the same
+// registry-only resolution read-summary-file uses (the diary manager window
+// has no clipboard payload yet). Fail-soft: on any resolution error the
+// caller gets an epoch-only context so reads keep working.
+function resolveDiaryVisibilityContext(playerId: string, checkpointEpoch?: number): DiaryVisibilityContext {
+    if (conversation && conversation.gameData && String(conversation.gameData.playerID) === playerId) {
+        try {
+            const context = buildContextFromGameData(conversation.gameData);
+            let registry: TimelineRegistry;
+            if (context.identity) {
+                const migrationResult = loadCampaignStoreWithMigration(
+                    app.getPath('userData'),
+                    context.identity,
+                    { observedState: observedStateFromContext(context) }
+                );
+                registry = migrationResult.loadResult.status === 'found'
+                    ? migrationResult.loadResult.store
+                    : new TimelineRegistry(playerId);
+            } else {
+                registry = loadRegistryForContext(app.getPath('userData'), context);
+            }
+            const resolved = resolveTimelineContext(registry, context);
+            return {
+                checkpointEpoch: resolved.checkpointEpoch ?? checkpointEpoch,
+                registry,
+                currentNodeId: resolved.timelineNodeId,
+                campaignId: context.identity?.campaignId
+            };
+        } catch (error) {
+            console.error('Error resolving diary visibility context from live game data:', error);
+        }
+    }
+    try {
+        const { context, registry, identity } = resolveTimelineWindowRequest(undefined, playerId, checkpointEpoch);
+        return {
+            checkpointEpoch: checkpointEpoch ?? context.checkpointEpoch,
+            registry,
+            currentNodeId: context.timelineNodeId,
+            campaignId: identity?.campaignId
+        };
+    } catch (error) {
+        console.error('Error resolving diary visibility context:', error);
+        return { checkpointEpoch };
+    }
+}
+
+/** Archives future diary records when the resolved context has a checkpoint epoch. */
+function archiveFutureDiaryRecordsIfCheckpointKnown(playerId: string, visibility: DiaryVisibilityContext, reason: string): void {
+    if (visibility.checkpointEpoch === undefined) {
+        return;
+    }
+    try {
+        const archived = archiveFutureDiaryRecordsForPlayer(playerId, visibility.checkpointEpoch, reason);
+        if (archived > 0) {
+            console.log(`Archived ${archived} future diary records for player ${playerId} at checkpoint ${visibility.checkpointEpoch} (${reason}).`);
+        }
+    } catch (error) {
+        console.error('Error archiving future diary records:', error);
+    }
+}
+
+ipcMain.handle('get-all-diaries-for-player', async (event, playerId: string, checkpointEpoch?: number) => {
     console.log(`IPC: Received get-all-diaries-for-player event for player: ${playerId}`);
     try {
-        const summaries = await getAllDiarySummaries(playerId);
+        const visibility = resolveDiaryVisibilityContext(playerId, checkpointEpoch);
+        // Same trigger as the history-window open in timelineIpc: reading the
+        // diary manager after a save rollback archives future records first.
+        archiveFutureDiaryRecordsIfCheckpointKnown(playerId, visibility, 'diary_manager_checkpoint_filter');
+        const summaries = await getAllDiarySummaries(playerId, visibility);
         summaries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
         return summaries;
     } catch (error) {
@@ -2108,35 +2197,10 @@ ipcMain.handle('get-all-diaries-for-player', async (event, playerId: string) => 
 ipcMain.handle('save-all-diary-summaries', async (event, playerId: string, summariesData: any[]) => {
     console.log(`IPC: Received save-all-diary-summaries event for player: ${playerId}`);
     try {
-        const summaryDir = path.join(app.getPath('userData'), 'votc_data', 'diary_summaries', playerId);
-        const existingSummaryFiles = fs.existsSync(summaryDir) ? fs.readdirSync(summaryDir).filter(f => f.endsWith('.json') && f !== '_character_map.json') : [];
-        const existingCharIds = new Set(existingSummaryFiles.map(f => f.replace('.json', '')));
-
-        const summariesByCharacter: { [key: string]: any[] } = {};
-        summariesData.forEach(summary => {
-            const characterId = summary.characterId;
-            if (!summariesByCharacter[characterId]) {
-                summariesByCharacter[characterId] = [];
-            }
-            summariesByCharacter[characterId].push(summary);
-            existingCharIds.delete(characterId);
-        });
-
-        for (const [characterId, summaries] of Object.entries(summariesByCharacter)) {
-            summaries.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
-            const cleanSummaries = summaries.map(({ characterName, ...rest }) => rest);
-            await saveDiarySummaries(playerId, characterId, cleanSummaries);
-        }
-
-        // Delete summaries for characters that were removed
-        for (const charIdToDelete of existingCharIds) {
-            const summaryPath = path.join(summaryDir, `${charIdToDelete}.json`);
-            if (fs.existsSync(summaryPath)) {
-                fs.unlinkSync(summaryPath);
-                console.log(`Deleted diary summary for character ${charIdToDelete}`);
-            }
-        }
-
+        // Merge semantics: the UI only saw context-visible summaries, so
+        // hidden (future/other-branch) summaries must survive the save.
+        const visibility = resolveDiaryVisibilityContext(playerId);
+        await saveAllDiarySummariesMerged(playerId, summariesData, visibility);
         return { success: true };
     } catch (error) {
         console.error('Error saving diary summaries:', error);
@@ -2187,6 +2251,15 @@ ipcMain.handle('get-diary-ids', async () => {
     console.log('IPC: Received get-diary-ids event.');
     try {
         const ids = await getAllDiaryPlayerIds(userDataPath);
+        // Player-level listing carries no per-record data to filter, but it is
+        // a diary manager entry point: archive future records for the live
+        // session player when checkpoint evidence exists (same trigger family
+        // as the history-window open in timelineIpc).
+        if (conversation && conversation.gameData) {
+            const livePlayerId = String(conversation.gameData.playerID);
+            const visibility = resolveDiaryVisibilityContext(livePlayerId);
+            archiveFutureDiaryRecordsIfCheckpointKnown(livePlayerId, visibility, 'diary_manager_checkpoint_filter');
+        }
         return { success: true, ids: ids };
     } catch (error) {
         console.error('Error getting diary IDs:', error);
@@ -2203,9 +2276,11 @@ ipcMain.handle('get-all-diary-player-ids', async () => {
         const playerTimestamps = await Promise.all(players.map(async (player) => {
             let latestTimestamp = 0;
             try {
+                const visibility = resolveDiaryVisibilityContext(player.id);
+                archiveFutureDiaryRecordsIfCheckpointKnown(player.id, visibility, 'diary_manager_checkpoint_filter');
                 const characterIds = await getDiaryFiles(player.id);
                 for (const charId of characterIds) {
-                    const diaryData = await readDiaryFile(player.id, charId);
+                    const diaryData = await readDiaryFile(player.id, charId, visibility);
                     if (diaryData && diaryData.diary_entries) {
                         for (const entry of diaryData.diary_entries) {
                             if (entry.creationTimestamp) {
@@ -2247,10 +2322,11 @@ ipcMain.handle('get-diary-files', async (event, playerId) => {
     }
 });
 
-ipcMain.handle('read-diary-file', async (event, playerId, characterId) => {
+ipcMain.handle('read-diary-file', async (event, playerId, characterId, checkpointEpoch?: number) => {
     console.log(`IPC: Received read-diary-file event for player: ${playerId}, character: ${characterId}`);
     try {
-        return await readDiaryFile(playerId, characterId);
+        const visibility = resolveDiaryVisibilityContext(playerId, checkpointEpoch);
+        return await readDiaryFile(playerId, characterId, visibility);
     } catch (error) {
         console.error('Error reading diary file:', error);
         return null;
@@ -2260,7 +2336,10 @@ ipcMain.handle('read-diary-file', async (event, playerId, characterId) => {
 ipcMain.handle('save-diary-file', async (event, playerId, characterId, diaryData) => {
     console.log(`IPC: Received save-diary-file event for player: ${playerId}, character: ${characterId}`);
     try {
-        await saveDiaryFile(playerId, characterId, diaryData);
+        // Merge semantics: preserve entries hidden in the current timeline
+        // context (the UI only ever received the visible ones).
+        const visibility = resolveDiaryVisibilityContext(playerId);
+        await saveDiaryFile(playerId, characterId, diaryData, visibility);
         return { success: true };
     } catch (error) {
         console.error('Error saving diary file:', error);

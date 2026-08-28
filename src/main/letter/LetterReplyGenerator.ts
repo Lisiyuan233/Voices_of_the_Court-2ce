@@ -16,8 +16,12 @@ import { getEffectivePrompts } from "../conversation/promptBuilder.js";
 import {
     TimelineRegistryCorruptError,
     TimelineParentNotFoundError,
+    FsTimelinePersistence,
+    resolveTimelineContext,
+    buildContextFromGameData,
     type CreateChildNodeResult,
-    type GameDataLike
+    type GameDataLike,
+    type TimelineRegistry
 } from '../timelineManager.js';
 import { UnsupportedTimelineSchemaError } from '../../shared/gameData/timelineProtocol.js';
 import { requireCampaignIdentity, CampaignIdentityUnavailableError } from '../campaignIdentityResolver.js';
@@ -29,12 +33,7 @@ import { reportCampaignIdentityUnavailable, reportCorruptTimelineRegistry, repor
 import { runLetterReplyTimelineTransition } from '../timelineBusinessWire.js';
 import type { CampaignPlayerIdentity } from '../../shared/gameData/CampaignIdentity.js';
 
-function indentCk3Block(block: string, indent: string): string {
-    return block
-        .split(/\r?\n/)
-        .map(line => line ? `${indent}${line}` : line)
-        .join('\n');
-}
+import { buildLetterFallbackPayload, buildLetterTimelineBlock } from './letterRunScript.js';
 
 function writeRunFileAtomically(filePath: string, content: string): void {
     const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
@@ -47,66 +46,32 @@ function writeRunFileAtomically(filePath: string, content: string): void {
 }
 
 /**
- * Build the guarded CK3 console script that applies a letter reply's timeline
- * node and clears the letter thread (ported from 1.x). The timeline script is
- * supplied only after the transition journal has created/reused its node.
- *
- * Unlike 1.x there is deliberately NO votc_letter_N_delivery_id guard here:
- * mod2 ce does not emit per-delivery ids, so the only mod-verifiable guard is
- * the thread marker itself.
- */
-function buildLetterReplyRunFile(
-    letterNumber: string,
-    deliveryId: number,
-    descriptionExpression: string,
-    timeline?: Pick<CreateChildNodeResult, 'script'>
-): string {
-    const timelineScript = timeline?.script
-        ? `${indentCk3Block(timeline.script, '\t')}\n`
-        : '';
-
-    return `if = {
-\tlimit = {
-\t\texists = global_var:votc_letter_${letterNumber}
-\t}
-${timelineScript}\tsend_interface_message = {
-\t\ttype = votc_message_popup
-\t\ttitle = votc_huixin_title${letterNumber}
-\t\tdesc = ${descriptionExpression}
-\t\tleft_icon = global_var:message_second_scope_letter_${letterNumber}
-\t}
-\tremove_global_variable ?= votc_letter_${letterNumber}
-}
-else = {
-\tdebug_log = "VOTC:LETTER/;/run_skipped/;/letter_${letterNumber}/;/${deliveryId}"
-}
-`;
-}
-
-/**
  * Drain one exact CK3 letter thread when the desktop app cannot produce a
- * reply (ported from 1.x). A timeline script is supplied only after the
- * transition journal has created/reused its node; writing this file before
- * any LLM work guarantees that exhausted retries still clear the stuck
- * thread and apply the journal-created timeline node.
+ * reply (ported from 1.x). mod2 ce has no per-slot letterN.txt execution
+ * point (the 1.x event_window_widget_message_N runners were never ported),
+ * so the fallback payload is written to letters.txt, which the mod's
+ * letters_runner widget already polls every ~2 seconds. The payload is
+ * thread-guarded and carries the guarded timeline commit block built from
+ * the transition journal's node; poll repeats after the first execution are
+ * inert because the thread marker is removed.
  */
 export function writeLetterReplyFallbackRunFile(
     userFolderPath: string,
     slotId: string,
     deliveryId: number,
-    timeline?: Pick<CreateChildNodeResult, 'script'>
+    timelineBlock?: string
 ): boolean {
     const letterNumber = slotId.match(/^letter_([1-9])$/)?.[1];
     if (!letterNumber || !Number.isSafeInteger(deliveryId) || deliveryId < 0) return false;
 
     const runFolderPath = path.join(userFolderPath, 'run');
     fs.mkdirSync(runFolderPath, { recursive: true });
-    const filePath = path.join(runFolderPath, `letter${letterNumber}.txt`);
+    const filePath = path.join(runFolderPath, 'letters.txt');
     writeRunFileAtomically(
         filePath,
-        buildLetterReplyRunFile(letterNumber, deliveryId, 'votc_letter_reply_fallback_desc', timeline)
+        '\uFEFF' + buildLetterFallbackPayload({ letterNumber, deliveryId, timelineBlock })
     );
-    console.warn(`[LetterReply] Fallback run file written for ${slotId}/${deliveryId}${timeline ? ' with timeline transition.' : ' without timeline transition.'}`);
+    console.warn(`[LetterReply] Fallback payload written to letters.txt for ${slotId}/${deliveryId}${timelineBlock ? ' with timeline transition.' : ' without timeline transition.'}`);
     return true;
 }
 
@@ -126,6 +91,33 @@ export class LetterReplyGenerator {
             config.textGenerationApiConnectionConfig.parameters
         );
         console.log('[LetterReplyGenerator] ApiConnection created.');
+    }
+
+    // IncomingLetterGenerator.getSummaryTimeline parity: load the timeline
+    // registry (campaign-scoped when the snapshot carries a v2 identity,
+    // player-only legacy fallback otherwise) so summary reads filter
+    // node-tagged records by branch instead of fail-closed hiding them.
+    private getSummaryTimeline(gameData: GameData): { registry: TimelineRegistry | undefined; currentNodeId: string | undefined } {
+        const persistence = new FsTimelinePersistence(app.getPath('userData'));
+        let registry: TimelineRegistry | undefined;
+        try {
+            const identity = requireCampaignIdentity({
+                playerID: gameData.playerID,
+                timelineSnapshotResult: gameData.timelineSnapshotResult
+            });
+            const result = persistence.loadStoreWithIdentity(identity);
+            registry = result.status === 'found' ? result.store : undefined;
+        } catch {
+            // Legacy snapshot: fall back to player-only display load.
+            registry = persistence.loadRegistry(String(gameData.playerID)) ?? undefined;
+        }
+        const context = registry
+            ? resolveTimelineContext(registry, buildContextFromGameData(gameData))
+            : buildContextFromGameData(gameData);
+        return {
+            registry,
+            currentNodeId: context.timelineNodeId
+        };
     }
 
 
@@ -163,7 +155,10 @@ export class LetterReplyGenerator {
             const depth = this.config.summaries_insert_depth || 3;
             // Archive future summaries before reading for letter prompt
             archiveFutureSummaryFilesForPlayer(this.userDataPath, String(player.id), gameData.votcCheckpointEpoch, 'letter_prompt_checkpoint_filter');
-            const summaries: Summary[] = await readSummaryFile(this.userDataPath, String(player.id), gameData.votcCheckpointEpoch);
+            // Pass the timeline registry so node-tagged summaries from the
+            // current branch stay visible (without it they fail-closed hide).
+            const summaryTimeline = this.getSummaryTimeline(gameData);
+            const summaries: Summary[] = await readSummaryFile(this.userDataPath, String(player.id), gameData.votcCheckpointEpoch, summaryTimeline.registry, summaryTimeline.currentNodeId);
             const aiSummaries = summaries.filter(summary => summary.characterId === String(ai.id)).slice(0, depth);
             
             if (aiSummaries.length > 0) {
@@ -257,6 +252,10 @@ export class LetterReplyGenerator {
      * @returns The generated reply content, or null on failure
      */
     public async generateLetterReply(gameData: GameData, letter: ILetter): Promise<ILetter | null> {
+        // Hoisted so the catch-all failure exit can still route the fallback
+        // payload for the timeline thread that was being generated.
+        let fallbackSnapshot: { slotId: string; deliveryId: number } | undefined;
+        let fallbackTimelineRunBlock: string | undefined;
         try {
             console.log('[LetterReplyGenerator] Starting letter reply generation.');
 
@@ -266,6 +265,7 @@ export class LetterReplyGenerator {
             // legacy path without a timeline branch.
             const slotId = /^letter_[1-9]$/.test(letter.subject) ? letter.subject : null;
             let timeline: CreateChildNodeResult | undefined;
+            let timelineRunBlock: string | undefined;
             let snapshot: { slotId: string; deliveryId: number } | undefined;
 
             if (slotId) {
@@ -274,8 +274,7 @@ export class LetterReplyGenerator {
                 // threads through the request key/journal identity only.
                 const deliveryId = Number.isSafeInteger(letter.totalDays) && letter.totalDays >= 0 ? letter.totalDays : 0;
                 snapshot = { slotId, deliveryId };
-
-                const userFolderPath = this.userDataPath;
+                fallbackSnapshot = snapshot;
 
                 let identity: CampaignPlayerIdentity;
                 try {
@@ -326,7 +325,11 @@ export class LetterReplyGenerator {
 
                 try {
                     const transition = await runLetterReplyTimelineTransition({
-                        userDataDir: userFolderPath,
+                        // Registry root must match every other timeline source
+                        // (conversation/incoming_letter/battle all use
+                        // app.getPath('userData')). this.userDataPath is the
+                        // votc_data subfolder used for summaries/letters only.
+                        userDataDir: app.getPath('userData'),
                         gameData: gameData as any as GameDataLike,
                         identity,
                         slotId: snapshot.slotId,
@@ -346,6 +349,23 @@ export class LetterReplyGenerator {
                         createdNewRoot: false
                     };
                     console.log(`Timeline node created for letter reply: ${timeline.nodeId} (parent: ${timeline.parentId ?? 'null'}, attempt: ${transition.attemptId}, reused: ${transition.reused})`);
+
+                    // Guarded CK3 commit block for the letters.txt channel.
+                    // Built once here and shared by the fallback payload
+                    // (written below) and the final delivery (persisted on the
+                    // reply letter so LetterManager.deliverLetter can splice
+                    // it into letters.txt after the travel delay, even across
+                    // an app restart). The block fail-closes on epoch/token
+                    // mismatch, so a delivery after an interleaved transition
+                    // logs timeline_skipped_* instead of regressing the save.
+                    timelineRunBlock = buildLetterTimelineBlock({
+                        letterNumber: slotId.replace('letter_', ''),
+                        deliveryId: snapshot.deliveryId,
+                        targetEpoch: nextCheckpointEpoch,
+                        checkpointToken: transition.context.checkpointToken,
+                        script: transition.script
+                    });
+                    fallbackTimelineRunBlock = timelineRunBlock;
                 } catch (error) {
                     if (error instanceof CampaignIdentityUnavailableError) {
                         reportCampaignIdentityUnavailable(error);
@@ -366,10 +386,6 @@ export class LetterReplyGenerator {
                     throw error;
                 }
 
-                // Safe, thread-guarded handoff before any prompt or LLM work:
-                // if generation exhausts retries, CK3 can still clear this
-                // exact thread and apply the journal-created timeline node.
-                writeLetterReplyFallbackRunFile(userFolderPath, snapshot.slotId, snapshot.deliveryId, timeline);
             }
 
             // Build prompt
@@ -394,6 +410,7 @@ export class LetterReplyGenerator {
 
             if (!response || response.trim() === '') {
                 console.warn('[LetterReplyGenerator] Empty response from LLM for letter reply');
+                this.writeLetterReplyFallbackPayload(snapshot, timelineRunBlock);
                 return null;
             }
 
@@ -412,7 +429,7 @@ export class LetterReplyGenerator {
 
             // Save letter history immediately
             console.log('[LetterReplyGenerator] Saving letter history...');
-            const replyLetter = await this.saveLetterHistory(String(letter.sender.id), String(letter.recipient.id), letter, escapedResponse, gameData, replyLetterId);
+            const replyLetter = await this.saveLetterHistory(String(letter.sender.id), String(letter.recipient.id), letter, escapedResponse, gameData, replyLetterId, timelineRunBlock);
             console.log('[LetterReplyGenerator] Letter history saved.');
             
             // Update original letter status back to 'sent' since reply is now pending
@@ -424,6 +441,10 @@ export class LetterReplyGenerator {
                 BrowserWindow.getAllWindows().forEach(win => {
                     win.webContents.send('letter-status-changed');
                 });
+            } else {
+                // The reply text exists but could not be persisted; the in-game
+                // thread would wait forever without the fallback handoff.
+                this.writeLetterReplyFallbackPayload(snapshot, timelineRunBlock);
             }
             return replyLetter;
         } catch (error: unknown) {
@@ -433,8 +454,35 @@ export class LetterReplyGenerator {
             } else {
                 console.error('[LetterReplyGenerator] An unknown error occurred during letter reply generation:', error);
             }
+            this.writeLetterReplyFallbackPayload(fallbackSnapshot, fallbackTimelineRunBlock);
             return null;
         }
+    }
+
+    /**
+     * Failure handoff for the letters.txt channel. Must only run after the
+     * LLM path has actually FAILED: unlike 1.x (whose letterN.txt executed
+     * once when the reply event window opened), letters.txt is polled every
+     * ~2 seconds by the mod's letters_runner widget, so a fallback written
+     * up-front would execute during the normal travel wait and consume the
+     * thread before the real reply could be delivered. Transition/identity
+     * failures reach this helper with no timelineRunBlock and intentionally
+     * write nothing (the journal committed no node; the thread can be
+     * cleared with the mod's clear-threads decision).
+     */
+    private writeLetterReplyFallbackPayload(
+        snapshot: { slotId: string; deliveryId: number } | undefined,
+        timelineRunBlock: string | undefined
+    ): void {
+        if (!snapshot || !timelineRunBlock) return;
+        // The fallback payload shares the letters.txt channel (the only
+        // letters execution point in mod2 ce), so it must go to the CK3 user
+        // folder, not the app data dir.
+        if (!this.config.userFolderPath) {
+            console.warn('[LetterReplyGenerator] userFolderPath is not configured; fallback run payload was not written.');
+            return;
+        }
+        writeLetterReplyFallbackRunFile(this.config.userFolderPath, snapshot.slotId, snapshot.deliveryId, timelineRunBlock);
     }
 
     /**
@@ -446,7 +494,7 @@ export class LetterReplyGenerator {
      * @param userFolderPath User folder path
      * @param gameData Game data (for character names)
      */
-    private async saveLetterHistory(playerId: string, aiId: string, originalLetter: ILetter, replyContent: string, gameData: GameData, replyLetterId: string): Promise<ILetter | null> {
+    private async saveLetterHistory(playerId: string, aiId: string, originalLetter: ILetter, replyContent: string, gameData: GameData, replyLetterId: string, timelineRunBlock?: string): Promise<ILetter | null> {
         try {
             const letterManager = LetterManager.getInstance();
     
@@ -488,6 +536,10 @@ export class LetterReplyGenerator {
                 expectedPlayerDeliveryDate // When the player should receive it
             );
             replyLetter.votcCheckpointEpoch = gameData.votcCheckpointEpoch;
+            // Persist the guarded timeline commit block with the reply so the
+            // delayed delivery (and rehydrated deliveries after an app
+            // restart) can still write the letter's node back to the save.
+            replyLetter.timelineRunBlock = timelineRunBlock;
     
             // Atomically update the history file
             const otherCharacterId = aiId; // The file is named after the non-player character

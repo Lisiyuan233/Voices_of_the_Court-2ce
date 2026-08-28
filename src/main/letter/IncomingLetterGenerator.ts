@@ -18,6 +18,10 @@ import { markChronicleUnhealthy } from '../chronicle/chronicleHealth.js';
 import { chronicleMemoryStorePath } from '../campaignDataPaths.js';
 import {
     TimelineRegistryCorruptError,
+    FsTimelinePersistence,
+    TimelineRegistry,
+    resolveTimelineContext,
+    buildContextFromGameData,
     type CreateChildNodeResult,
     type GameDataLike
 } from '../timelineManager.js';
@@ -248,11 +252,40 @@ export class IncomingLetterGenerator {
 
     // 2CE summaryManager/getEffectivePrompts convention: callers pass the
     // <userData>/votc_data root (see main.ts and LetterReplyGenerator), not
-    // the bare userData dir. 1.x read summaries from the campaign namespace;
-    // 2CE's saveSummaryFile has no identity branch yet, so reads stay in the
-    // legacy namespace the rest of the 2CE conversation/letter flow shares.
+    // the bare userData dir. Letter summaries stay in the legacy namespace
+    // the rest of the 2CE conversation/letter flow shares (the read-summary
+    // IPC resolves no campaign identity without a manager window context);
+    // the timeline registry only drives branch visibility and merge-save.
     private getVotcDataRoot(): string {
         return path.join(app.getPath('userData'), 'votc_data');
+    }
+
+    // 1.x IncomingLetterGenerator.getSummaryTimeline parity: load the timeline
+    // registry (campaign-scoped when the snapshot carries a v2 identity,
+    // player-only legacy fallback otherwise) so summary reads filter
+    // node-tagged records by branch and summary saves merge instead of
+    // overwriting hidden sibling-branch records.
+    private getSummaryTimeline(gameData: GameData): { registry: TimelineRegistry | undefined; currentNodeId: string | undefined } {
+        const persistence = new FsTimelinePersistence(app.getPath('userData'));
+        let registry: TimelineRegistry | undefined;
+        try {
+            const identity = requireCampaignIdentity({
+                playerID: gameData.playerID,
+                timelineSnapshotResult: gameData.timelineSnapshotResult
+            });
+            const result = persistence.loadStoreWithIdentity(identity);
+            registry = result.status === 'found' ? result.store : undefined;
+        } catch {
+            // Legacy snapshot: fall back to player-only display load.
+            registry = persistence.loadRegistry(String(gameData.playerID)) ?? undefined;
+        }
+        const context = registry
+            ? resolveTimelineContext(registry, buildContextFromGameData(gameData))
+            : buildContextFromGameData(gameData);
+        return {
+            registry,
+            currentNodeId: context.timelineNodeId
+        };
     }
 
     public async generateIncomingLetter(
@@ -543,10 +576,13 @@ export class IncomingLetterGenerator {
                 gameData.votcCheckpointEpoch,
                 'incoming_letter_summary_checkpoint_filter'
             );
+            const summaryTimeline = this.getSummaryTimeline(gameData);
             const summaries = await readSummaryFile(
                 userDataPath,
                 String(gameData.playerID),
-                gameData.votcCheckpointEpoch
+                gameData.votcCheckpointEpoch,
+                summaryTimeline.registry,
+                summaryTimeline.currentNodeId
             );
             const senderSummaries = summaries.filter(summary => summary.characterId === String(context.senderId));
             if (senderSummaries.length > 0) {
@@ -955,10 +991,17 @@ else = {
             'incoming_letter_summary_checkpoint_filter'
         );
 
+        // Read with the timeline context so node-tagged summaries from the
+        // current branch stay visible; without a registry the fail-closed
+        // filter would drop them and the save below would lose them (the
+        // pre-merge bug this guards against).
+        const summaryTimeline = this.getSummaryTimeline(gameData);
         const existingSummaries = await readSummaryFile(
             userDataPath,
             String(gameData.playerID),
-            gameData.votcCheckpointEpoch
+            gameData.votcCheckpointEpoch,
+            summaryTimeline.registry,
+            summaryTimeline.currentNodeId
         );
         const senderCharacterId = String(context.senderId);
         const senderSummaries = existingSummaries.filter(summary => summary.characterId === senderCharacterId);
@@ -980,7 +1023,12 @@ else = {
         };
 
         const updatedSummaries: Summary[] = [newSummary, ...senderSummaries, ...otherSummaries];
-        await saveSummaryFile(userDataPath, String(gameData.playerID), updatedSummaries, gameData.votcCheckpointEpoch + 1);
+        // Merge-save with the timeline context: hidden sibling-branch records
+        // stay on disk and summary files of other senders are never deleted.
+        await saveSummaryFile(userDataPath, String(gameData.playerID), updatedSummaries, gameData.votcCheckpointEpoch + 1, {
+            registry: summaryTimeline.registry,
+            currentNodeId: summaryTimeline.currentNodeId
+        });
         console.log(`[IncomingLetterGenerator] Summary saved for sender ${context.senderId}`);
     }
 }

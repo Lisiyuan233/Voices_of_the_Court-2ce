@@ -304,7 +304,10 @@ export async function buildChatPrompt(conv: Conversation, character: Character, 
         console.log(`Inserted memories at depth: ${conv.config.memoriesInsertDepth}.`);
     }
 
-    const diarySummaries = await readDiarySummaries(conv.gameData.playerID.toString(), character.id.toString(), conv.gameData.votcCheckpointEpoch);
+    const diarySummaries = await readDiarySummaries(conv.gameData.playerID.toString(), character.id.toString(), {
+        checkpointEpoch: conv.gameData.votcCheckpointEpoch,
+        campaignId: conv.campaignIdentity?.campaignId
+    });
     const recentDiarySummaries = diarySummaries.slice(0, conv.config.maxSummaries);
     if (recentDiarySummaries.length > 0) {
         const summaryContent = recentDiarySummaries.map(s => `${s.date}: ${s.summary}`).join('\n');

@@ -337,13 +337,170 @@ export async function readSummaryFile(
     }
 }
 
+export interface SaveSummaryOptions {
+    registry?: TimelineRegistry;
+    currentNodeId?: string;
+    /** Route generated source records to the campaign/player namespace. */
+    identity?: CampaignPlayerIdentity;
+    /** Replace records visible in this context while retaining hidden branches. */
+    replaceVisibleContext?: boolean;
+}
+
+function summaryMergeKey(summary: any): string {
+    if (summary?.id) return `id:${summary.id}`;
+    return [
+        summary?.votcTimelineNodeId ?? '',
+        getSummaryCheckpointEpoch(summary) ?? '',
+        summary?.date ?? '',
+        summary?.content ?? ''
+    ].join('\u001f');
+}
+
+/**
+ * Three-way merge for timeline-aware saves (1.x summaryManager parity):
+ * incoming records replace same-key records, and on-disk records that are not
+ * represented in the incoming set are preserved. With `replaceVisibleContext`,
+ * a missing record that was visible in the caller's context counts as a
+ * deletion, while hidden sibling-branch records still survive.
+ */
+export function mergeSummariesForTimelineSave(
+    incomingSummaries: any[],
+    existingOnDisk: any[],
+    checkpointEpoch: number | undefined,
+    options: SaveSummaryOptions = {}
+): any[] {
+    const incomingKeys = new Set(incomingSummaries.map(summaryMergeKey));
+    const preservedFromOtherBranches = existingOnDisk.filter((summary: any) => {
+        if (incomingKeys.has(summaryMergeKey(summary))) return false;
+        if (!options.replaceVisibleContext) return true;
+
+        // A missing record that was visible in the manager is a deletion. Hidden
+        // sibling-branch records were never sent to the renderer and must survive.
+        return !isRecordVisibleForContext(
+            options.registry,
+            options.currentNodeId,
+            summary,
+            checkpointEpoch
+        );
+    });
+    return [...incomingSummaries, ...preservedFromOtherBranches];
+}
+
+/**
+ * Timeline-aware save path: merges incoming (current-context) summaries with
+ * the on-disk set instead of overwriting whole files, and never deletes
+ * summary files for characters absent from the incoming set.
+ */
+async function saveSummaryFileWithTimelineMerge(
+    userDataPath: string,
+    playerId: string,
+    summaries: Summary[],
+    checkpointEpoch: number | undefined,
+    options: SaveSummaryOptions
+): Promise<void> {
+    try {
+        const summaryDir = options.identity
+            ? campaignConversationSummariesDir(app.getPath('userData'), options.identity)
+            : path.join(userDataPath, 'conversation_summaries', playerId);
+
+        // Ensure directory exists
+        if (!fs.existsSync(summaryDir)) {
+            fs.mkdirSync(summaryDir, { recursive: true });
+        }
+
+        // Group summaries by character ID
+        const summariesByCharacter: { [key: string]: Summary[] } = {};
+        summaries.forEach(summary => {
+            const characterId = summary.characterId || 'default';
+            if (!summariesByCharacter[characterId]) {
+                summariesByCharacter[characterId] = [];
+            }
+            summariesByCharacter[characterId].push(summary);
+        });
+
+        // The manager may delete the last visible summary for a character. Include
+        // existing files so an empty incoming group can still replace that context.
+        const characterIds = new Set(Object.keys(summariesByCharacter));
+        if (options.replaceVisibleContext) {
+            fs.readdirSync(summaryDir)
+                .filter(file => file.endsWith('.json') && file !== '_character_map.json')
+                .forEach(file => characterIds.add(path.basename(file, '.json')));
+        }
+
+        for (const characterId of characterIds) {
+            const characterSummaries = summariesByCharacter[characterId] ?? [];
+            const summaryFilePath = path.join(summaryDir, `${characterId}.json`);
+
+            // Remove characterId field as it is already in the filename
+            const cleanSummaries = characterSummaries.map((summary) => {
+                const { characterId: _drop, ...cleanSummary } = summary;
+                return cleanSummary;
+            });
+            const incomingFiltered = checkpointEpoch === undefined
+                ? cleanSummaries
+                : filterSummariesForCheckpoint(cleanSummaries, checkpointEpoch);
+
+            let existingOnDisk: any[] = [];
+            if (fs.existsSync(summaryFilePath)) {
+                try {
+                    const readExisting = JSON.parse(fs.readFileSync(summaryFilePath, 'utf8'));
+                    if (Array.isArray(readExisting)) {
+                        if (checkpointEpoch !== undefined) {
+                            // Archive legacy (no-node) future summaries before merging.
+                            const archiveResult = archiveFutureSummariesForCheckpoint(userDataPath, playerId, characterId, readExisting, checkpointEpoch, {
+                                sourceFilePath: summaryFilePath,
+                                reason: 'save_summary_file_checkpoint_filter'
+                            });
+                            existingOnDisk = archiveResult.visibleSummaries;
+                        } else {
+                            existingOnDisk = readExisting;
+                        }
+                    }
+                } catch (error) {
+                    console.error(`Failed to read existing summaries before merge ${summaryFilePath}:`, error);
+                }
+            }
+
+            const mergedSummaries = mergeSummariesForTimelineSave(
+                incomingFiltered,
+                existingOnDisk,
+                checkpointEpoch,
+                options
+            );
+
+            fs.writeFileSync(summaryFilePath, JSON.stringify(mergedSummaries, null, '\t'), 'utf8');
+        }
+    } catch (error) {
+        console.error('Error saving summary file:', error);
+        throw error;
+    }
+}
+
 /**
  * Saves summaries to their respective character files for a given player.
+ *
+ * Legacy behavior (no options argument): whole-overwrite semantics; summary
+ * files for characters absent from `summaries` are deleted. When an options
+ * object is provided, the timeline-aware merge path is used instead: hidden
+ * sibling-branch records on disk are preserved and no character files are
+ * deleted. Callers opt into the merge path by passing `options`, even when
+ * every field is undefined (e.g. registry unavailable): the merge still
+ * preserves on-disk records that are missing from the incoming set.
+ *
  * @param userDataPath The path to the user data directory.
  * @param playerId The ID of the player.
  * @param summaries An array of all summaries to save.
  */
-export async function saveSummaryFile(userDataPath: string, playerId: string, summaries: Summary[], checkpointEpoch?: number): Promise<void> {
+export async function saveSummaryFile(
+    userDataPath: string,
+    playerId: string,
+    summaries: Summary[],
+    checkpointEpoch?: number,
+    options?: SaveSummaryOptions
+): Promise<void> {
+    if (options !== undefined) {
+        return saveSummaryFileWithTimelineMerge(userDataPath, playerId, summaries, checkpointEpoch, options);
+    }
     try {
         const summaryDir = path.join(userDataPath, 'conversation_summaries', playerId);
         

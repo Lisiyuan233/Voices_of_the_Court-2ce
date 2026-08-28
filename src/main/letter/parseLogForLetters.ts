@@ -74,8 +74,13 @@ export async function parseLettersFromLog(debugLogPath: string, gameData: GameDa
                     const recipient = gameData.characters.get(Number(recipientIdFromLog));
 
                     if (sender && recipient) {
-                        const correctedGameDate = totalDaysToDateString(gameData.totalDays);
-                        const letter = Letter.fromLog(sender, recipient, letterId, content, correctedGameDate, delay, gameData.totalDays);
+                        // Under protocol v2 the init line no longer carries totalDays;
+                        // prefer the VOTC:DATE extra block (gameData.gameDate) and only
+                        // fall back to the legacy totalDays field (populated by the
+                        // VOTC:LETTER flow in main.ts).
+                        const currentTotalDays = gameData.gameDate?.totalDays ?? gameData.totalDays;
+                        const correctedGameDate = totalDaysToDateString(currentTotalDays);
+                        const letter = Letter.fromLog(sender, recipient, letterId, content, correctedGameDate, delay, currentTotalDays);
                         if (letter) {
                             letter.votcCheckpointEpoch = gameData.votcCheckpointEpoch;
                             letters.push(letter);

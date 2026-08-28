@@ -278,12 +278,26 @@ describe('run builder uniqueness and guarded commit coverage', () => {
         expect(runBuilders.some(relative => relative.split(path.sep).join('/') === 'main/battleReport/battleReportRunScript.ts')).toBe(true);
     });
 
-    it('uses the transition-generated checkpoint script for final and fallback letter replies', () => {
+    it('uses the transition-generated checkpoint script for letter reply delivery and fallback', () => {
         const letterFile = path.join(PROJECT_ROOT, 'src/main/letter/LetterReplyGenerator.ts');
         const text = fs.readFileSync(letterFile, 'utf-8');
         expect(text).toContain("scopeVar: 'global_var:message_first_scope'");
-        expect(text).toContain('writeLetterReplyFallbackRunFile(userFolderPath, snapshot.slotId, snapshot.deliveryId, timeline)');
-        expect(text).toContain('timeline?.script');
+        // The registry root must match every other timeline source; the
+        // votc_data subfolder (this.userDataPath) is for summaries/letters.
+        expect(text).toContain("userDataDir: app.getPath('userData')");
+        // The guarded commit block is built once from the transition result
+        // and shared by the fallback payload and the persisted reply letter.
+        expect(text).toContain('buildLetterTimelineBlock({');
+        expect(text).toContain('writeLetterReplyFallbackRunFile(this.config.userFolderPath, snapshot.slotId, snapshot.deliveryId, timelineRunBlock)');
+        expect(text).toContain('replyLetter.timelineRunBlock = timelineRunBlock');
+        expect(text).not.toContain('set_variable = { name = votc_timeline_node_a');
+    });
+
+    it('delivers letter replies through the guarded letters.txt payload', () => {
+        const managerFile = path.join(PROJECT_ROOT, 'src/main/letter/LetterManager.ts');
+        const text = fs.readFileSync(managerFile, 'utf-8');
+        expect(text).toContain('buildLetterDeliveryPayload({');
+        expect(text).toContain('timelineBlock: storedLetter.letter.timelineRunBlock');
         expect(text).not.toContain('set_variable = { name = votc_timeline_node_a');
     });
 });
