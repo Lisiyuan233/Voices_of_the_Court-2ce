@@ -169,8 +169,8 @@ export const en = {
     "settings.workbenchOpenWindow.tooltip": "Open the Prompt Workbench window to browse captured samples and preview their baseline prompts.",
 
     "settings.saveFactsTitle": "Save-game facts (experimental)",
-    "settings.saveFactsParsingEnabled": "Parse automatic snapshots in CK3 debug mode",
-    "settings.saveFactsParsingEnabled.tooltip": "In CK3 debug mode, automatically wait for and parse the conversation save snapshot. Normal mode skips parsing.",
+    "settings.saveFactsParsingEnabled": "Automatically parse conversation save snapshots",
+    "settings.saveFactsParsingEnabled.tooltip": "When a conversation starts, automatically wait for and parse the save snapshot. Debug-mode saves are plain text; normal-mode saves are binary and parsed via melt (requires a CK3 version covered by the built-in token table).",
     "settings.saveFactsPromptEnabled": "Use filtered save facts in prompts",
     "settings.saveFactsPromptEnabled.tooltip": "Send facts filtered for relevance and visibility together with the normal prompt.",
     "settings.saveFactsPromptDependsOnParsing": "Requires snapshot parsing to be enabled.",
@@ -206,7 +206,7 @@ export const en = {
     "settings.saveFactsDiagnostics.injectedFacts": "Injected facts",
     "settings.saveFactsDiagnostics.injectedTokens": "Injected tokens",
     "settings.saveFactsDiagnostics.warnings": "Warnings",
-    "settings.saveFactsDebugOnlyNote": "Automatic save parsing runs only when CK3 is launched in debug mode. In normal mode CK3 still keeps votc_context.ck3, but VOTC skips parsing and starts the conversation with live GameData only.",
+    "settings.saveFactsParsingNote": "Automatic save parsing works in both debug and normal mode: debug saves are parsed as plain text; normal-mode binary saves are melted using the built-in token table (currently CK3 1.19.0.6 — binary saves from other versions are skipped and VOTC falls back to live GameData only).",
     "settings.saveFactsPrivacyNote": "Filtered relevant facts are sent with the normal prompt to your configured model service. The full save game is never uploaded.",
 
     "workbench.windowTitle": "Prompt Workbench",

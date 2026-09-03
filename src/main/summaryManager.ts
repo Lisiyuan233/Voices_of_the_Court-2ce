@@ -148,29 +148,66 @@ export function archiveFutureSummaryFilesForPlayer(userDataPath: string, playerI
 export async function getAllPlayerIds(userDataPath: string): Promise<{ id: string, name: string }[]> {
     try {
         const summaryDir = path.join(userDataPath, 'conversation_summaries');
-        if (!fs.existsSync(summaryDir)) {
-            return [];
+        const playerDirsData: { id: string, name: string }[] = [];
+        if (fs.existsSync(summaryDir)) {
+            playerDirsData.push(...fs.readdirSync(summaryDir, { withFileTypes: true })
+                .filter(dirent => dirent.isDirectory())
+                .map(dirent => {
+                    const playerId = dirent.name;
+                    const mapPath = path.join(summaryDir, playerId, '_character_map.json');
+                    let playerName = `Player ${playerId}`; // Fallback name
+                    if (fs.existsSync(mapPath)) {
+                        try {
+                            const mapContent = fs.readFileSync(mapPath, 'utf8');
+                            const mapData = JSON.parse(mapContent);
+                            if (mapData[playerId]) {
+                                playerName = mapData[playerId];
+                            }
+                        } catch (e) {
+                            console.error(`Error reading character map for player ${playerId}:`, e);
+                        }
+                    }
+                    return { id: playerId, name: playerName };
+                }));
         }
 
-        const playerDirsData = fs.readdirSync(summaryDir, { withFileTypes: true })
-            .filter(dirent => dirent.isDirectory())
-            .map(dirent => {
-                const playerId = dirent.name;
-                const mapPath = path.join(summaryDir, playerId, '_character_map.json');
-                let playerName = `Player ${playerId}`; // Fallback name
-                if (fs.existsSync(mapPath)) {
-                    try {
-                        const mapContent = fs.readFileSync(mapPath, 'utf8');
-                        const mapData = JSON.parse(mapContent);
-                        if (mapData[playerId]) {
-                            playerName = mapData[playerId];
-                        }
-                    } catch (e) {
-                        console.error(`Error reading character map for player ${playerId}:`, e);
-                    }
+        // F24: campaign-scoped conversation_summaries stores are part of the
+        // same listing surface. Scan every campaign's player store so
+        // campaign-only players show up in the summary manager; ids already
+        // present from the flat scan keep their flat entry (first wins).
+        const campaignsRoot = path.join(userDataPath, 'campaigns');
+        if (fs.existsSync(campaignsRoot)) {
+            for (const campaignId of fs.readdirSync(campaignsRoot)) {
+                const campaignPlayersDir = path.join(campaignsRoot, campaignId, 'players');
+                if (!fs.existsSync(campaignPlayersDir)) {
+                    continue;
                 }
-                return { id: playerId, name: playerName };
-            });
+                for (const dirent of fs.readdirSync(campaignPlayersDir, { withFileTypes: true })) {
+                    if (!dirent.isDirectory()) continue;
+                    const playerId = dirent.name;
+                    if (playerDirsData.some(player => player.id === playerId)) {
+                        continue;
+                    }
+                    const campaignSummaryDir = path.join(campaignPlayersDir, playerId, 'conversation_summaries');
+                    if (!fs.existsSync(campaignSummaryDir)) {
+                        continue;
+                    }
+                    let playerName = `Player ${playerId}`;
+                    const mapPath = path.join(campaignSummaryDir, '_character_map.json');
+                    if (fs.existsSync(mapPath)) {
+                        try {
+                            const mapData = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
+                            if (mapData[playerId]) {
+                                playerName = mapData[playerId];
+                            }
+                        } catch (e) {
+                            console.error(`Error reading campaign character map for player ${playerId}:`, e);
+                        }
+                    }
+                    playerDirsData.push({ id: playerId, name: playerName });
+                }
+            }
+        }
 
         const playerTimestamps = await Promise.all(playerDirsData.map(async (player) => {
             let latestTimestamp = 0;

@@ -44,6 +44,8 @@ export function buildSuggestionPrompt(conv: Conversation): Message[] {
     let description = "";
     try {
         delete require.cache[require.resolve(descriptionPath)];
+        // Per-build scene budget for extended facts (see GameData).
+        conv.gameData.resetExtendedFactsSceneBudget();
         description = require(descriptionPath)(conv.gameData, conv.gameData.getPlayer());
     } catch (err) {
         console.error(`Description script error for '${descriptionScriptFileName}': ${err}`);

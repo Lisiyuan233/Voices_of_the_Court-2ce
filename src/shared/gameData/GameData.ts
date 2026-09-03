@@ -1,5 +1,5 @@
-import { Character } from "./Character";
-import { removeTooltip } from "./parseLog";
+import { Character, EXTENDED_FACTS_SCENE_TOKEN_BUDGET, SceneFactsBudgetState } from "./Character";
+import { removeTooltip } from "./ck3Text";
 import { parseSaveSnapshotExtra, type SaveSnapshotExtraParseResult } from "./saveSnapshotProtocol";
 import {
     parseTimelineSnapshot,
@@ -39,10 +39,24 @@ export type OpinionModifier = {
     value: number,
 }
 
+/**
+ * Owned secret of a character, as emitted by the mod's owned-secret block
+ * (`secret` base line + sub-lines up to `secret_eob`). Field naming follows
+ * the log-side KnownSecret shape below; the rootID of every block line is the
+ * secret's owner, so there is no owner field.
+ */
 export type Secret = {
     name: string,
     desc: string,
-    category: string
+    category: string,
+    type: string,
+    targetId?: number,
+    targetName?: string,
+    isCriminal?: boolean,
+    isShunned?: boolean,
+    spent?: boolean,
+    canBeExposed?: boolean,
+    otherKnowers: { id: number; name: string }[]
 }
 
 export interface CharacterKnowledgeRef {
@@ -354,6 +368,17 @@ export class GameData {
 
     characters: Map<number,Character>
     militarySnapshot?: MilitarySnapshot;
+    /**
+     * Shared per-prompt-build aggregate budget for P0 extended facts
+     * (chars/4 heuristic, see EXTENDED_FACTS_SCENE_TOKEN_BUDGET). The
+     * description scripts call Character.getExtendedFactsDescription once per
+     * character, so the scene-level state hangs off this instance and is
+     * handed to characters when they join the map. The prompt builders reset
+     * it through resetExtendedFactsSceneBudget before each description-script
+     * run, so the cap applies to one prompt build and never leaks across
+     * builds or conversations (each parse creates a fresh GameData).
+     */
+    extendedFactsSceneBudget: SceneFactsBudgetState;
 
     constructor(data: string[]){
             this.playerID = Number(data[0]),
@@ -400,6 +425,7 @@ export class GameData {
         }
 
             this.characters = new Map<number,Character>
+        this.extendedFactsSceneBudget = { remainingTokens: EXTENDED_FACTS_SCENE_TOKEN_BUDGET };
     }
 
     getPlayer(): Character{
@@ -430,6 +456,32 @@ export class GameData {
     addCharacter(id: number, character: Character): void {
         console.log(`[GameData.addCharacter] Adding character ID: ${id}, name: ${character.fullName}`);
         this.characters.set(id, character);
+        this.attachSceneFactsBudget(character);
+    }
+
+    /**
+     * Restores the scene-wide extended-facts budget for a new prompt build.
+     * The prompt builders call this right before executing a description
+     * script (pListMcc*.js), so the aggregate cap covers exactly one build.
+     * Also (re-)hands the fresh state to every character already in the map.
+     */
+    resetExtendedFactsSceneBudget(): void {
+        this.extendedFactsSceneBudget = { remainingTokens: EXTENDED_FACTS_SCENE_TOKEN_BUDGET };
+        this.characters.forEach(char => this.attachSceneFactsBudget(char));
+    }
+
+    /**
+     * Links a character to this GameData's scene budget state. The link is a
+     * non-enumerable property so it never appears in IPC/JSON serialization
+     * of characters and is not cloned into renderer copies of the snapshot.
+     */
+    private attachSceneFactsBudget(character: Character): void {
+        Object.defineProperty(character, 'sceneFactsBudget', {
+            value: this.extendedFactsSceneBudget,
+            enumerable: false,
+            writable: true,
+            configurable: true
+        });
     }
 
     /**
@@ -482,7 +534,11 @@ export class GameData {
         } else {
             console.log(`[GameData.fromPlainObject] No characters found in obj.characters`);
         }
-        
+
+        // Drop any serialized budget remnant and hand every revived character
+        // a fresh scene budget (a revived snapshot is a new prompt context).
+        instance.resetExtendedFactsSceneBudget();
+
         return instance;
     }
 

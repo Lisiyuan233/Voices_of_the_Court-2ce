@@ -171,8 +171,8 @@ export const zh: Record<I18nKey, string> = {
     "settings.workbenchOpenWindow.tooltip": "打开提示词打磨工具窗口，浏览已捕获的样本并预览其 baseline prompt。",
 
     "settings.saveFactsTitle": "存档事实（实验）",
-    "settings.saveFactsParsingEnabled": "在 CK3 debug 模式下解析自动快照",
-    "settings.saveFactsParsingEnabled.tooltip": "CK3 以 debug 模式启动时，对话开始会自动等待并解析存档快照；普通模式下跳过解析。",
+    "settings.saveFactsParsingEnabled": "自动解析对话存档快照",
+    "settings.saveFactsParsingEnabled.tooltip": "对话开始时自动等待并解析存档快照；debug 模式存档为明文，普通模式存档为二进制（经 melt 解析，需与内置 token 表支持的 CK3 版本一致）。",
     "settings.saveFactsPromptEnabled": "在 Prompt 中使用筛选后的存档事实",
     "settings.saveFactsPromptEnabled.tooltip": "将按相关性与可见性筛选后的事实随正常 Prompt 一起发送。",
     "settings.saveFactsPromptDependsOnParsing": "需要先启用存档快照解析。",
@@ -208,7 +208,7 @@ export const zh: Record<I18nKey, string> = {
     "settings.saveFactsDiagnostics.injectedFacts": "已注入事实数",
     "settings.saveFactsDiagnostics.injectedTokens": "已注入 token 数",
     "settings.saveFactsDiagnostics.warnings": "警告",
-    "settings.saveFactsDebugOnlyNote": "自动存档解析仅在 CK3 以 debug 模式启动时运行。普通模式下 CK3 仍会保留 votc_context.ck3，但 VOTC 会跳过解析，直接使用实时 GameData 开始对话。",
+    "settings.saveFactsParsingNote": "自动存档解析在 debug 与普通模式下均可运行：debug 模式存档为明文直接解析；普通模式的二进制存档通过内置 token 表 melt 后解析（当前支持 CK3 1.19.0.6，其他版本的二进制存档会跳过解析，回退为仅使用实时 GameData）。",
     "settings.saveFactsPrivacyNote": "筛选后的相关事实会随正常 Prompt 发送给已配置的模型服务，完整存档不会上传。",
 
     "workbench.windowTitle": "提示词打磨工具",

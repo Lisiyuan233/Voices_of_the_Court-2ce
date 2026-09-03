@@ -85,12 +85,77 @@ export function conversationSummariesDir(userDataDir: string, identity: Campaign
     return path.join(campaignPlayerDir(userDataDir, identity), 'conversation_summaries');
 }
 
+/**
+ * One-shot marker for the flat conversation_summaries migration (F24).
+ * Deliberately OUTSIDE the store directory itself: the store dir holds one
+ * `<characterId>.json` array file per character, and every reader lists
+ * `*.json` there — a marker inside would be parsed as a summary array.
+ *
+ * Path shape:
+ *   <userData>/votc_data/campaigns/<cid>/players/<pid>/conversation_summaries_migration.json
+ */
+export function conversationSummariesMigrationMarkerPath(userDataDir: string, identity: CampaignPlayerIdentity): string {
+    return path.join(campaignPlayerDir(userDataDir, identity), 'conversation_summaries_migration.json');
+}
+
 export function conversationHistoryDir(userDataDir: string, identity: CampaignPlayerIdentity): string {
     return path.join(campaignPlayerDir(userDataDir, identity), 'conversation_history');
 }
 
 export function letterHistoryDir(userDataDir: string, identity: CampaignPlayerIdentity): string {
     return path.join(campaignPlayerDir(userDataDir, identity), 'letter_history');
+}
+
+/**
+ * Letter chat-store directory under the campaign/player namespace (F21).
+ * This is the LetterManager domain (writing-letter threads shown in the
+ * Letters page, plus their per-correspondent letter summaries) and is a
+ * DIFFERENT feature from the timeline `letter_history` records above.
+ *
+ * Path shape:
+ *   <userData>/votc_data/campaigns/<campaignId>/players/<playerId>/letters/
+ */
+export function lettersDir(userDataDir: string, identity: CampaignPlayerIdentity): string {
+    return path.join(campaignPlayerDir(userDataDir, identity), 'letters');
+}
+
+/** Per-correspondent letter thread files (`ILetter[]`, keyed by character). */
+export function letterThreadsDir(userDataDir: string, identity: CampaignPlayerIdentity): string {
+    return path.join(lettersDir(userDataDir, identity), 'threads');
+}
+
+export function letterThreadPath(
+    userDataDir: string,
+    identity: CampaignPlayerIdentity,
+    characterId: string
+): string {
+    validatePathSafeName(characterId, 'characterId');
+    return path.join(letterThreadsDir(userDataDir, identity), `${characterId}.json`);
+}
+
+/** Per-correspondent letter summary files (`LetterSummary[]`, keyed by character). */
+export function letterSummariesDir(userDataDir: string, identity: CampaignPlayerIdentity): string {
+    return path.join(lettersDir(userDataDir, identity), 'summaries');
+}
+
+export function letterSummaryPath(
+    userDataDir: string,
+    identity: CampaignPlayerIdentity,
+    characterId: string
+): string {
+    validatePathSafeName(characterId, 'characterId');
+    return path.join(letterSummariesDir(userDataDir, identity), `${characterId}.json`);
+}
+
+/**
+ * One-shot marker for the flat letter-store migration (F21). Its presence
+ * records that the legacy `votc_data/letter_history` / `letter_summaries`
+ * player store was already folded into this campaign namespace, so later
+ * legacy writes (degraded sessions) are left in place instead of being
+ * re-migrated back and forth.
+ */
+export function letterStoreMigrationMarkerPath(userDataDir: string, identity: CampaignPlayerIdentity): string {
+    return path.join(lettersDir(userDataDir, identity), 'migration.json');
 }
 
 export function letterHistoryArchivedDir(userDataDir: string, identity: CampaignPlayerIdentity): string {

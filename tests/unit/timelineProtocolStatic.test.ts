@@ -224,6 +224,100 @@ describe('VOTC:TIMELINE snapshot/bump schema identity', () => {
     });
 });
 
+describe('VOTC:BATTLE_REPORT campaign identity and delivery framework (F22)', () => {
+    it('emits a VOTC:BATTLE_REPORT campaign line with real campaign identity', () => {
+        const content = readModFile('common/scripted_effects/votc_battle_report_effects.txt');
+        const lines = findDebugLogLines(content, 'VOTC:BATTLE_REPORT/;/campaign/;/');
+        expect(lines.length).toBeGreaterThan(0);
+        for (const line of lines) {
+            const fields = splitFields(line);
+            expect(fields[0]).toBe('VOTC:BATTLE_REPORT');
+            expect(fields[1]).toBe('campaign');
+            // playerId, protocolSchema=2, campaignSchema=1, then four id globals.
+            expect(fields[3]).toBe(String(TIMELINE_PROTOCOL_SCHEMA));
+            expect(fields[4]).toBe(String(TIMELINE_CAMPAIGN_SCHEMA));
+            expect(fields.slice(5, 9)).toEqual(CAMPAIGN_ID_GLOBAL_TOKENS);
+        }
+    });
+
+    it('§10.1 emits VOTC:BATTLE_REPORT snapshot_begin/snapshot_end/delivery_id lines with slot + delivery id', () => {
+        const content = readModFile('common/scripted_effects/votc_battle_report_effects.txt');
+        // snapshot_begin: VOTC:BATTLE_REPORT/;/snapshot_begin/;/slot/;/deliveryId
+        const beginLines = findDebugLogLines(content, 'VOTC:BATTLE_REPORT/;/snapshot_begin/;/');
+        expect(beginLines.length).toBeGreaterThan(0);
+        for (const line of beginLines) {
+            const fields = splitFields(line);
+            expect(fields[0]).toBe('VOTC:BATTLE_REPORT');
+            expect(fields[1]).toBe('snapshot_begin');
+            // fields[2] is the slot flag token, fields[3] is the delivery id var
+            expect(fields[2]).toContain('votc_battle_report_num');
+            expect(fields[3]).toContain('votc_battle_report_active_delivery_id');
+        }
+        // snapshot_end: same shape
+        const endLines = findDebugLogLines(content, 'VOTC:BATTLE_REPORT/;/snapshot_end/;/');
+        expect(endLines.length).toBeGreaterThan(0);
+        for (const line of endLines) {
+            const fields = splitFields(line);
+            expect(fields[1]).toBe('snapshot_end');
+            expect(fields[3]).toContain('votc_battle_report_active_delivery_id');
+        }
+        // delivery_id: VOTC:BATTLE_REPORT/;/delivery_id/;/slot/;/id
+        const deliveryIdLines = findDebugLogLines(content, 'VOTC:BATTLE_REPORT/;/delivery_id/;/');
+        expect(deliveryIdLines.length).toBeGreaterThan(0);
+        for (const line of deliveryIdLines) {
+            const fields = splitFields(line);
+            expect(fields[0]).toBe('VOTC:BATTLE_REPORT');
+            expect(fields[1]).toBe('delivery_id');
+            expect(fields[2]).toContain('votc_battle_report_num');
+            expect(fields[3]).toContain('votc_battle_report_active_delivery_id');
+        }
+    });
+
+    it('emits VOTC:BATTLE_REPORT side_result lines for both combat sides', () => {
+        const content = readModFile('common/scripted_effects/votc_battle_report_effects.txt');
+        const lines = findDebugLogLines(content, 'VOTC:BATTLE_REPORT/;/side_result/;/');
+        expect(lines.length).toBe(2);
+        for (const line of lines) {
+            const fields = splitFields(line);
+            expect(fields[2]).toContain('GetMainParticipant.GetID');
+            expect(fields.length).toBe(6);
+        }
+    });
+
+    it('§10.1 defines votc_generate_battle_delivery_id_effect and appends 28 random bits', () => {
+        const content = readModFile('common/scripted_effects/votc_checkpoint_effects.txt');
+        expect(content).toContain('votc_generate_battle_delivery_id_effect = {');
+        expect(content).toContain('votc_append_battle_delivery_id_bit_effect = {');
+        // Count the append calls: 28 bits like the pending token generator.
+        const appendCount = (content.match(/votc_append_battle_delivery_id_bit_effect = (?:\{\}|yes)/g) || []).length;
+        expect(appendCount).toBe(28);
+    });
+
+    it('§10.1 battle_report_events generates a per-slot delivery id and cleans it up', () => {
+        const content = readModFile('events/battle_report_events.txt');
+        // Each of the 15 slots should generate the delivery id and store it
+        // in both the per-slot variable and the active variable.
+        const generateCount = (content.match(/votc_generate_battle_delivery_id_effect = (?:\{\}|yes)/g) || []).length;
+        expect(generateCount).toBe(15);
+        // Each slot must persist its delivery id as a global. Console run
+        // scripts cannot reliably read a character-local id through the
+        // transient saved battle scope.
+        const perSlotSetCount = (content.match(/set_global_variable\s*=\s*\{\s*name = votc_battle_report_\d+_delivery_id\s*\n\s*value = var:votc_battle_report_delivery_id/g) || []).length;
+        expect(perSlotSetCount).toBe(15);
+        // Each slot should set the active delivery id variable
+        const activeSetCount = (content.match(/name = votc_battle_report_active_delivery_id\s*\n\s*value = var:votc_battle_report_delivery_id/g) || []).length;
+        expect(activeSetCount).toBe(15);
+        // Each slot cleanup should remove both the active and the per-slot
+        // delivery id. (2CE cleans the delivery id global in its 9021 timer
+        // expiry block — mod1 does it in delayed 9041-9055 failsafes — so the
+        // per-slot global cleanup regex still expects exactly 15 occurrences.)
+        const activeCleanupCount = (content.match(/remove_variable \?= votc_battle_report_active_delivery_id/g) || []).length;
+        expect(activeCleanupCount).toBe(15);
+        const perSlotCleanupCount = (content.match(/remove_global_variable \?= votc_battle_report_\d+_delivery_id/g) || []).length;
+        expect(perSlotCleanupCount).toBe(15);
+    });
+});
+
 describe('campaign id generation effects', () => {
     it('defines votc_init/generate/validate_campaign_id_effect in checkpoint effects', () => {
         const content = readModFile('common/scripted_effects/votc_checkpoint_effects.txt');

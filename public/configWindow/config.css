@@ -1704,3 +1704,30 @@ mark.current-highlight {
 #diary-manager-saveBtn .btn-text {
     vertical-align: middle;
 }
+
+/* ---- Navbar layout fixes ---- */
+/* The <language-selector> custom element sits directly in the flex navbar ul.
+   With no explicit rules it defaulted to order:0 (before all tabs) and could
+   flex-shrink to zero width, spilling its button over the Connection tab. */
+.navbar language-selector {
+  order: 2; /* after the tab li's (order:1), at the far right past Help */
+  flex-grow: 0;
+  flex-shrink: 0;
+  min-width: 130px;
+  display: flex;
+  align-items: center;
+}
+
+/* Social links keep their intrinsic width; shrinking them spills the icons
+   over the first tab. */
+.navbar .social-links-li {
+  flex-shrink: 0;
+}
+
+/* Tabs may shrink when the navbar is crowded, but their labels must
+   ellipsize inside their own box instead of painting over neighbours. */
+.navbar li a {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

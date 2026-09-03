@@ -43,6 +43,8 @@ export interface Summary{
     votcCheckpointEpoch?: number;
     votcTimelineNodeId?: string;
     votcTimelineParentId?: string;
+    /** F21: campaign lineage stamp for campaign-scoped summary stores. */
+    votcCampaignId?: string;
     id?: string;
     characterName?: string;
     sourceType?: 'conversation' | 'letter' | 'incoming_letter' | 'battle_report';

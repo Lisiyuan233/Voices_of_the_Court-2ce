@@ -9,18 +9,27 @@
  * direct observeParsedGameDataForChronicle integration tests in
  * chronicleObservation.test.ts. This file covers the two generator paths
  * that ARE testable as classes.
+ *
+ * F12: the LetterReplyGenerator block is behavior-level again (ported from
+ * 1.x chronicleObservationCallOrder.test.ts:213-301). 2CE's
+ * generateLetterReply(gameData, letter) takes a pre-parsed snapshot, so the
+ * log is parsed with parseLog here and handed to the generator; the observe
+ * call order is asserted against jest invocationCallOrder (runtime behavior,
+ * not source text).
  */
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
 jest.mock('electron', () => ({
-    app: { getPath: jest.fn(() => '/tmp/votc-chronicle-callorder-userdata') }
+    app: { getPath: jest.fn(() => '/tmp/votc-chronicle-callorder-userdata') },
+    BrowserWindow: { getAllWindows: jest.fn(() => []) }
 }));
 
 jest.mock('../../src/shared/apiConnection', () => ({
     ApiConnection: jest.fn().mockImplementation(() => ({
         complete: jest.fn().mockResolvedValue('LLM_REPLY_BODY'),
+        calculateTokensFromText: jest.fn(() => 1),
         context: 4096,
         model: 'test-model',
         overwriteWarning: false,
@@ -60,6 +69,9 @@ import { LetterReplyGenerator } from '../../src/main/letter/LetterReplyGenerator
 import { IncomingLetterGenerator } from '../../src/main/letter/IncomingLetterGenerator';
 import { Config } from '../../src/shared/Config';
 import { chronicleMemoryStorePath } from '../../src/main/campaignDataPaths';
+import { parseLog } from '../../src/shared/gameData/parseLog';
+import type { GameData } from '../../src/shared/gameData/GameData';
+import { Letter as ILetter, LetterType } from '../../src/main/letter/letterInterfaces';
 import {
     TIMELINE_PROTOCOL_SCHEMA,
     TIMELINE_CAMPAIGN_SCHEMA
@@ -210,24 +222,166 @@ function makeMinimalConfig(): Config {
     } as unknown as Config;
 }
 
-describe('chronicle observe call-order: LetterReplyGenerator (2CE shape)', () => {
-    // 2CE 的 generateLetterReply(gameData, letter) 不再从日志路径驱动（1.x 为
-    // logPath+slot+deliveryId），无法按 1.x 方式动态驱动完整链路。改为源码级
-    // 钉住观察点的位置契约：observe 调用必须位于身份解析之后、任何
-    // apiConnection.complete 之前。
-    const generatorSource = fs.readFileSync(
-        path.join(__dirname, '../../src/main/letter/LetterReplyGenerator.ts'),
-        'utf8'
-    );
+describe('chronicle observe call-order: LetterReplyGenerator', () => {
+    let tmpDir: string;
+    let userDataDir: string;
 
-    it('places the chronicle observation after identity resolution and before the LLM call', () => {
-        const identityIdx = generatorSource.indexOf('requireCampaignIdentity({');
-        const observeIdx = generatorSource.indexOf("observeParsedGameDataForChronicle(app.getPath('userData'), gameData, 'letter'");
-        const completeIdx = generatorSource.indexOf('.complete(');
-        expect(identityIdx).toBeGreaterThanOrEqual(0);
-        expect(observeIdx).toBeGreaterThan(identityIdx);
-        expect(completeIdx).toBeGreaterThan(observeIdx);
-        expect(generatorSource).toContain("'letter', this.config.language");
+    beforeEach(() => {
+        tmpDir = makeTmpDir();
+        userDataDir = makeTmpDir();
+        (app.getPath as jest.Mock).mockReturnValue(userDataDir);
+        (chronicleObservation.observeParsedGameDataForChronicle as jest.Mock).mockClear();
+    });
+    afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        fs.rmSync(userDataDir, { recursive: true, force: true });
+    });
+
+    // 2CE's generateLetterReply(gameData, letter) takes a pre-parsed
+    // snapshot, so the snapshot log is parsed here and handed to the
+    // generator (1.x passed logPath + slot + deliveryId instead).
+    // main.ts passes <userData>/votc_data as the generator's userDataPath,
+    // so mirror that layout and seed the minimal prompt config the prompt
+    // builder loads from it.
+    const generatorUserDataPath = () => path.join(userDataDir, 'votc_data');
+
+    function seedPromptConfig(): void {
+        const promptsDir = path.join(generatorUserDataPath(), 'configs', 'prompts');
+        fs.mkdirSync(promptsDir, { recursive: true });
+        fs.writeFileSync(
+            path.join(promptsDir, 'en.json'),
+            JSON.stringify({
+                prompts: {
+                    letterPrompt: 'Reply to the letter in {{letterLanguage}}: {{letterContent}}',
+                    letterSummaryPrompt: 'Summarize: {{playerLetterContent}} / {{aiReplyContent}}',
+                    memoriesPrompt: 'Memories:'
+                },
+                mod_prompt_sets: {}
+            }),
+            'utf8'
+        );
+    }
+
+    async function parseLetterGameData(logPath: string): Promise<GameData> {
+        const gameData = await parseLog(logPath);
+        expect(gameData).toBeDefined();
+        return gameData!;
+    }
+
+    function makeLetter(gameData: GameData, overrides: Partial<ILetter> = {}): ILetter {
+        return {
+            id: 'letter-test-original',
+            sender: gameData.characters.get(PLAYER_ID)!,
+            recipient: gameData.characters.get(AI_ID)!,
+            subject: 'letter_1',
+            content: 'letter-body-text',
+            timestamp: new Date('1066-01-01T00:00:00Z'),
+            creationTimestamp: new Date('1066-01-01T00:00:00Z'),
+            isRead: false,
+            letterType: LetterType.PERSONAL,
+            delay: 10,
+            totalDays: 7,
+            status: 'generating',
+            ...overrides
+        };
+    }
+
+    function latestCompleteMock(): jest.Mock {
+        const apiModule = jest.requireMock('../../src/shared/apiConnection') as { ApiConnection: jest.Mock };
+        const results = apiModule.ApiConnection.mock.results;
+        return results[results.length - 1].value.complete;
+    }
+
+    it('calls observeParsedGameDataForChronicle after parseLog and before the LLM complete call', async () => {
+        const logContent = makeLetterReplyLog();
+        const logPath = writeDebugLog(tmpDir, logContent);
+        const gameData = await parseLetterGameData(logPath);
+        seedPromptConfig();
+
+        const observeMock = chronicleObservation.observeParsedGameDataForChronicle as jest.Mock;
+        const generator = new LetterReplyGenerator(makeMinimalConfig(), generatorUserDataPath());
+
+        const result = await generator.generateLetterReply(gameData, makeLetter(gameData));
+
+        expect(result).not.toBeNull();
+        expect(observeMock).toHaveBeenCalledTimes(1);
+        const [calledUserDataDir, , source, language] = observeMock.mock.calls[0];
+        expect(calledUserDataDir).toBe(userDataDir);
+        expect(source).toBe('letter');
+        expect(language).toBe('中文');
+
+        // Runtime behavior, not source text: the chronicle observation must
+        // have been invoked before the LLM request.
+        const complete = latestCompleteMock();
+        expect(complete).toHaveBeenCalled();
+        expect(observeMock.mock.invocationCallOrder[0]).toBeLessThan(complete.mock.invocationCallOrder[0]);
+    });
+
+    it('writes the chronicle memory store file during the observe step (write-through before business)', async () => {
+        const slotId = 'letter_1';
+        const deliveryId = 8;
+        const logContent = [
+            `VOTC:LETTER/;/snapshot_begin/;/${slotId}/;/${deliveryId}`,
+            v2InitLine(),
+            characterLine(PLAYER_ID, 'Player', 'Player FullName'),
+            characterLine(AI_ID, 'AI', 'AI FullName'),
+            `VOTC:LETTER/;/slot_metadata/;/${slotId}/;/${deliveryId}/;/${AI_ID}`,
+            `VOTC:LETTER/;/中文/;/letter-body-text-2/;/${slotId}/`,
+            `VOTC:LETTER/;/snapshot_end/;/${slotId}/;/${deliveryId}`
+        ].join('\n');
+        const logPath = writeDebugLog(tmpDir, logContent);
+        const gameData = await parseLetterGameData(logPath);
+        seedPromptConfig();
+
+        const generator = new LetterReplyGenerator(makeMinimalConfig(), generatorUserDataPath());
+        await generator.generateLetterReply(gameData, makeLetter(gameData, { totalDays: deliveryId }));
+
+        const expectedIdentity = {
+            campaignId: '1-2-3-4',
+            playerId: String(PLAYER_ID)
+        };
+        const storePath = chronicleMemoryStorePath(userDataDir, expectedIdentity as any);
+        expect(fs.existsSync(storePath)).toBe(true);
+    });
+
+    it('writes a delivery-guarded fallback payload to letters.txt when reply generation fails', async () => {
+        const apiModule = jest.requireMock('../../src/shared/apiConnection') as { ApiConnection: jest.Mock };
+        const originalImplementation = apiModule.ApiConnection.getMockImplementation();
+        const complete = jest.fn().mockRejectedValue(new Error('Connection error.'));
+        apiModule.ApiConnection.mockImplementation(() => ({
+            complete,
+            calculateTokensFromText: jest.fn(() => 1),
+            context: 4096,
+            model: 'test-model',
+            overwriteWarning: false,
+            thinkingEnabled: false,
+            config: { type: 'openrouter' },
+            parameters: { temperature: 0.7, frequency_penalty: 0, presence_penalty: 0, top_p: 1 }
+        }));
+
+        try {
+            // config.userFolderPath is the CK3 user folder the letters.txt
+            // channel lives in; point it at the tmp dir for this test.
+            const config = makeMinimalConfig();
+            config.userFolderPath = tmpDir;
+            const logPath = writeDebugLog(tmpDir, makeLetterReplyLog());
+            const gameData = await parseLetterGameData(logPath);
+            seedPromptConfig();
+            const generator = new LetterReplyGenerator(config, generatorUserDataPath());
+
+            await expect(
+                generator.generateLetterReply(gameData, makeLetter(gameData, { subject: 'letter_2' }))
+            ).resolves.toBeNull();
+
+            const runFile = path.join(tmpDir, 'run', 'letters.txt');
+            const script = fs.readFileSync(runFile, 'utf8');
+            expect(script).toContain('desc = votc_letter_reply_fallback_desc');
+            expect(script).toContain('/letter_2/;/7');
+            expect(script).not.toContain('LLM_REPLY_BODY');
+            expect(complete).toHaveBeenCalledTimes(1);
+        } finally {
+            apiModule.ApiConnection.mockImplementation(originalImplementation);
+        }
     });
 });
 

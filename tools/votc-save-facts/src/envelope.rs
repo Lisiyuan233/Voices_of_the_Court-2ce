@@ -8,7 +8,7 @@
 //! - `SAV0100` 纯文本（unified text）；
 //! - `SAV0102` 风格 prefixed ZIP + text gamestate；
 //! - ZIP + binary header → zip_binary；无 ZIP + binary header →
-//!   unified_binary；binary 内容绝不交给文本 scanner；
+//!   unified_binary；binary 内容经 melt 模块转成明文后才交给文本 scanner；
 //! - header 声称是 ZIP 格式（Unified/Split）但 central directory 定位失败
 //!   → 截断/损坏，不是 unified text；
 //! - 无法解析的 header / Other kind → unknown。
@@ -61,13 +61,46 @@ pub struct OpenedSave {
 }
 
 impl OpenedSave {
-    /// binary 格式（zip_binary / unified_binary）已识别但不提供 reader，
-    /// 调用方返回 unsupported（无 token resolver）。
+    /// binary 格式（zip_binary / unified_binary）：经 melt 模块接入 token
+    /// 表后按文本路径处理（版本门禁在 melt 层）。
     pub fn is_binary(&self) -> bool {
         matches!(
             self.format,
             SourceFormat::ZipBinary | SourceFormat::UnifiedBinary
         )
+    }
+
+    /// binary gamestate reader（含 ZIP 解压流），借用 self，供 melt 包装。
+    pub fn gamestate_binary(&self) -> Result<Box<dyn Read + '_>, EnvelopeError> {
+        match self.jomini.gamestate() {
+            Ok(SaveContentKind::Binary(body)) => Ok(body.into_inner()),
+            // header 说 binary 但 jomini 判 text：不信任，拒绝。
+            Ok(SaveContentKind::Text(_)) => Err(EnvelopeError::Unknown),
+            Err(e) => Err(match e.kind() {
+                jomini::envelope::EnvelopeErrorKind::ZipUnsupportedCompression => {
+                    EnvelopeError::UnsupportedCompression
+                }
+                _ => EnvelopeError::Truncated,
+            }),
+        }
+    }
+
+    /// binary gamestate reader，ZIP 时带 CRC/size 校验（读到 EOF 时验证），
+    /// 语义与 `gamestate_verified()` 的 text 版一致。
+    pub fn gamestate_binary_verified(&self) -> Result<Box<dyn Read + '_>, EnvelopeError> {
+        match self.jomini.kind() {
+            JominiFileKind::Zip(zip) => match zip.gamestate_verified() {
+                Ok(SaveContentKind::Binary(reader)) => Ok(Box::new(reader)),
+                Ok(SaveContentKind::Text(_)) => Err(EnvelopeError::Unknown),
+                Err(e) => Err(match e.kind() {
+                    jomini::envelope::EnvelopeErrorKind::ZipUnsupportedCompression => {
+                        EnvelopeError::UnsupportedCompression
+                    }
+                    _ => EnvelopeError::Truncated,
+                }),
+            },
+            JominiFileKind::Uncompressed(_) => self.gamestate_binary(),
+        }
     }
 
     /// text gamestate reader（含 ZIP 解压流），借用 self。
@@ -237,7 +270,7 @@ pub fn open(path: &Path) -> Result<OpenedSave, EnvelopeError> {
         JominiFileKind::Zip(zip) => Some(zip.gamestate_uncompressed_hint()),
         JominiFileKind::Uncompressed(_) => None,
     };
-    if format == SourceFormat::ZipText {
+    if matches!(format, SourceFormat::ZipText | SourceFormat::ZipBinary) {
         // 宣称超大 uncompressed size 直接拒绝，不进入解压流（zip bomb
         // 前置防线；流式防线在 identity 的 CountingReader）。
         if hint.is_some_and(|h| h > limits::HARD_MAX_DECOMPRESSED_BYTES) {

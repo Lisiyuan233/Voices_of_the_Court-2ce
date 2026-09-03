@@ -3,6 +3,12 @@ import path from 'path';
 
 const UTF8_BOM = Buffer.from([0xEF, 0xBB, 0xBF]);
 
+// F11: the close-effect trigger the empty-file path appends. Some callers
+// (e.g. the conversation close block in Conversation.ts) already chain this
+// trigger inside their effect text, so blindly appending it fires
+// mcc_event_v2.9003 twice.
+const CLOSE_EFFECT_TRIGGER = 'trigger_event = mcc_event_v2.9003';
+
 export class RunFileManager {
     private path: string;
 
@@ -29,9 +35,14 @@ export class RunFileManager {
             }
 
             if (currentText.trim() === '') {
-                console.log(`RunFileManager: Run file is empty - writing new effect.`);
-                this.writeWithBom(`${text}\n          
-            root = {trigger_event = mcc_event_v2.9003}`);
+                if (text.includes(CLOSE_EFFECT_TRIGGER)) {
+                    console.log(`RunFileManager: Run file is empty - effect already triggers mcc_event_v2.9003, writing without duplicate.`);
+                    this.writeWithBom(`${text}\n`);
+                } else {
+                    console.log(`RunFileManager: Run file is empty - writing new effect.`);
+                    this.writeWithBom(`${text}\n
+            root = {${CLOSE_EFFECT_TRIGGER}}`);
+                }
             } else {
                 console.log(`RunFileManager: Run file is not empty - prepending new effect.`);
                 this.writeWithBom(`${text}\n${currentText}`);

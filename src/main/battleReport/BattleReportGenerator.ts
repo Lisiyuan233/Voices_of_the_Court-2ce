@@ -3,12 +3,51 @@ import { Character } from "../../shared/gameData/Character";
 import { Config } from "../../shared/Config";
 import { GameData } from "../../shared/gameData/GameData";
 import { MilitarySnapshot } from "../../shared/gameData/GameData";
-import { readLastMilitarySnapshotFromLog } from "../../shared/gameData/parseLog";
+import { readLastMilitarySnapshotFromLog, removeTooltip } from "../../shared/gameData/parseLog";
 import { formatMilitaryBrief } from "../conversation/militaryBrief";
 import { Message } from "../ts/conversation_interfaces";
 import { getEffectivePrompts } from "../conversation/promptBuilder";
 import * as fs from "fs";
 import * as path from "path";
+import { app } from "electron";
+import { randomUUID } from "crypto";
+import { archiveFutureBattleReportHistoryForPlayer } from "../conversationHistory";
+import { buildBattleReportRunScript, type BattleCommitTarget } from "./battleReportRunScript.js";
+import {
+    TimelineRegistryCorruptError,
+    buildContextFromBattleCheckpoint,
+    parseNodeId,
+    type CreateChildNodeResult,
+    type TimelineContext,
+    type GameDataLike
+} from '../timelineManager.js';
+import {
+    runBattleTimelineBatchTransition,
+    type BattleBatchTransitionEntry
+} from '../timelineBusinessWire.js';
+import {
+    coordinateBattlesBySnapshot,
+    type BattleCoordinatorEntry
+} from '../timelineCoordinator.js';
+import {
+    UnsupportedTimelineSchemaError,
+    parseTimelineSnapshot,
+    type ObservedTimelineState,
+    type TimelineParseResult
+} from '../../shared/gameData/timelineProtocol.js';
+import { reportCorruptTimelineRegistry, reportUnsupportedTimelineSchema } from '../timelineRegistryRecovery.js';
+import { consumeTimelineCommitResultsFromLog } from '../timelineCommitResult.js';
+import { battleReportHistoryPath as campaignBattleReportHistoryPath } from '../campaignDataPaths.js';
+import type { CampaignPlayerIdentity } from '../../shared/gameData/CampaignIdentity.js';
+import { parseBattleReportCampaignIdentityPayload } from './battleReportCampaignIdentity.js';
+import { resolveBattleReportGameDate } from './battleReportGameDate.js';
+import {
+    applyBattleReportContentUpdate,
+    buildBattleReportHistoryRecord,
+    isBattleReportHistoryRecordV1,
+    matchesBattleDedupKey
+} from './battleReportHistoryRecord.js';
+import { updateJsonArrayAtomic } from '../history/historyAtomicJson.js';
 
 export type BattleOutcome = "victory" | "defeat";
 export type BattleSide = "attacker" | "defender";
@@ -38,6 +77,7 @@ interface BattleReportData {
     slotId: string;
     legacySingleSlot?: boolean;
     playerId: string;
+    timelineCheckpoint?: TimelineParseResult;
     date: string;
     location: string;
     terrain?: string;
@@ -53,9 +93,21 @@ interface BattleReportData {
     enemiesKilled?: number;
     result?: BattleOutcome;
     winningSide?: BattleSide;
+    sideResults: BattleSideResult[];
     commanders: BattleCommander[];
     notableCharacters: NotableBattleCharacter[];
     tags: Set<string>;
+    /**
+     * §10.1: Mod-emitted per-battle occurrence evidence. The mod generates a
+     * fresh 28-bit id per slot allocation and logs it as
+     * `VOTC:BATTLE_REPORT/;/delivery_id/;/slot/;/id`. Two distinct battles
+     * with identical facts cannot collide on the requestKey.
+     */
+    battleDeliveryId?: number;
+    /** V2 campaign identity emitted in this battle's own log block. */
+    campaignIdentity?: CampaignPlayerIdentity;
+    /** Delivery id carried on the campaign line; must match delivery_id. */
+    campaignDeliveryId?: number;
 }
 
 const TAG_LABELS: Record<string, { zh: string; en: string }> = {
@@ -152,6 +204,12 @@ export class BattleReportGenerator {
 
     public async generateBattleReport(gameData: GameData | undefined, debugLogPath: string, userFolderPath: string): Promise<string | null> {
         try {
+            // F22: commit_result consumption at generation time (1.x
+            // BattleReportGenerator parity). Battle run scripts log
+            // VOTC:TIMELINE commit_result lines; they must be folded into the
+            // battle report history records before the next batch writes new
+            // attempt records, so outcome stamping never lags a batch.
+            consumeTimelineCommitResultsFromLog(debugLogPath, app.getPath('userData'));
             const latestBattlesBySlot = this.extractBattleReportData(debugLogPath);
             if (!latestBattlesBySlot.length) {
                 console.error("Failed to extract battle report data");
@@ -174,8 +232,12 @@ export class BattleReportGenerator {
                 return null;
             }
 
+            const signatureByBattle = new Map<BattleReportData, string>();
+            const sourceRecordIdBySignature = new Map<string, string>();
             for (const battleData of pending) {
                 const signature = this.getBattleSignature(battleData);
+                signatureByBattle.set(battleData, signature);
+                sourceRecordIdBySignature.set(signature, randomUUID());
                 battleReportInFlightSignatures.add(signature);
                 latestBattleReportSignatureBySlot.set(battleData.slotId, signature);
                 battleReportStatuses.set(battleData.slotId, {
@@ -185,13 +247,195 @@ export class BattleReportGenerator {
                 });
             }
 
+            // A checkpoint archive must be campaign-scoped. Character ids can
+            // recur in a fresh game, while the battle block's campaign token
+            // uniquely identifies this CK3 session.
+            const archivedCampaignEpochs = new Map<string, {
+                playerId: string;
+                checkpointEpoch: number;
+                identity: CampaignPlayerIdentity;
+            }>();
+            pending.forEach((battleData) => {
+                const currentCheckpointEpoch = this.getCurrentCheckpointEpoch(battleData, gameData);
+                const identity = battleData.campaignIdentity;
+                if (currentCheckpointEpoch !== undefined && identity) {
+                    archivedCampaignEpochs.set(`${identity.campaignId}:${identity.playerId}`, {
+                        playerId: identity.playerId,
+                        checkpointEpoch: currentCheckpointEpoch,
+                        identity
+                    });
+                }
+            });
+            for (const { playerId, checkpointEpoch, identity } of archivedCampaignEpochs.values()) {
+                const archivedCount = await archiveFutureBattleReportHistoryForPlayer(
+                    playerId,
+                    checkpointEpoch,
+                    'battle_report_checkpoint_filter',
+                    identity
+                );
+                if (archivedCount > 0) {
+                    console.log(`Archived ${archivedCount} future battle report history records for campaign ${identity.campaignId}, player ${playerId}.`);
+                }
+            }
+
+            // Create timeline child nodes for each battle. The battle signature
+            // is stored as eventSignature (audit only); the requestKey is
+            // slot+battleDeliveryId so the journal API dedups attempts by
+            // delivery id (the fallback and final LLM report for the same
+            // battle share the same delivery id -> same node via rule 1 reuse).
+            const timelineBySignature = new Map<string, CreateChildNodeResult>();
+            const attemptIdBySignature = new Map<string, string>();
+            const identityBySignature = new Map<string, CampaignPlayerIdentity>();
+
+            // Group by the battle block's campaign identity, not only player.
+            // A single debug.log can contain reports from several games whose
+            // historical character ids happen to match.
+            const battlesByCampaign = new Map<string, BattleReportData[]>();
+            for (const battleData of pending) {
+                const playerId = battleData.playerId || (gameData ? String(gameData.playerID) : '');
+                if (!playerId) continue;
+                const identity = battleData.campaignIdentity;
+                const groupKey = identity
+                    ? `${identity.campaignId}:${identity.playerId}`
+                    : `missing:${playerId}`;
+                const arr = battlesByCampaign.get(groupKey) ?? [];
+                arr.push(battleData);
+                battlesByCampaign.set(groupKey, arr);
+            }
+
+            for (const battlesForThisPlayer of battlesByCampaign.values()) {
+                try {
+                    // The V2 identity is emitted in each battle's own log
+                    // block. It must not be resolved from gameData, whose last
+                    // VOTC:IN snapshot can be unrelated or absent.
+                    const batchIdentity = battlesForThisPlayer[0]?.campaignIdentity;
+                    if (!batchIdentity) {
+                        console.warn(`[BattleReport] Missing V2 campaign identity for player ${battlesForThisPlayer[0]?.playerId || 'unknown'}; delivering without a timeline transition.`);
+                        continue;
+                    }
+                    const batchIdentityFinal = batchIdentity;
+                    for (const battleData of battlesForThisPlayer) {
+                        const sig = signatureByBattle.get(battleData)!;
+                        identityBySignature.set(sig, batchIdentityFinal);
+                    }
+                    // Build batch entries: each battle contributes one child node.
+                    // buildBattleTimelineContext can throw UnsupportedTimelineSchemaError
+                    // if the battle's checkpoint reports an unsupported schema; such
+                    // battles are skipped (reported) and the remaining battles in the
+                    // batch still proceed.
+                    const coordinatorEntries: BattleCoordinatorEntry[] = [];
+                    const signatureByEntryIndex: string[] = [];
+                    for (const battleData of battlesForThisPlayer) {
+                        const signature = signatureByBattle.get(battleData)!;
+                        let snapshotContext: TimelineContext;
+                        try {
+                            snapshotContext = this.buildBattleTimelineContext(battleData, gameData);
+                        } catch (error) {
+                            if (error instanceof UnsupportedTimelineSchemaError) {
+                                reportUnsupportedTimelineSchema(error.schema);
+                                continue;
+                            }
+                            throw error;
+                        }
+                        // §9.3 P5.4 / §10.1: battle requestKey = slot + battleDeliveryId.
+                        // The mod emits a real, unique 28-bit battleDeliveryId per
+                        // slot allocation (VOTC:BATTLE_REPORT/;/delivery_id). The full
+                        // facts signature stays as eventSignature (audit only).
+                        // Legacy mods that do not emit the delivery_id line fall back
+                        // to the facts signature so the requestKey is still stable.
+                        const battleDeliveryId = battleData.battleDeliveryId !== undefined
+                            ? String(battleData.battleDeliveryId)
+                            : signature;
+                        coordinatorEntries.push({
+                            eventSignature: `battle:${signature}`,
+                            slotId: battleData.slotId,
+                            battleDeliveryId,
+                            context: snapshotContext,
+                            nextEpoch: this.getNextCheckpointEpoch(battleData, gameData)
+                        });
+                        signatureByEntryIndex.push(signature);
+                    }
+                    // §10.1: order multi-battle batches by snapshot evidence via
+                    // TimelineCoordinator, then run one batch transition under the
+                    // per-player timeline lock (§7.5 P3.4).
+                    const coordination = coordinateBattlesBySnapshot(coordinatorEntries);
+                    for (const dropped of coordination.dropped) {
+                        console.warn(`[BattleReport] Dropped battle entry (slot=${dropped.entry.slotId}, delivery=${dropped.entry.battleDeliveryId}): ${dropped.reason}`);
+                    }
+                    const entries: BattleBatchTransitionEntry[] = coordination.planned.map(planned => ({
+                        eventSignature: planned.eventSignature,
+                        slotId: planned.slotId,
+                        battleDeliveryId: planned.battleDeliveryId,
+                        context: planned.context,
+                        nextEpoch: planned.resolvedNextEpoch
+                    }));
+                    const batchResult = await runBattleTimelineBatchTransition({
+                        userDataDir: app.getPath('userData'),
+                        gameData: gameData as any as GameDataLike,
+                        identity: batchIdentityFinal,
+                        entries
+                    });
+                    for (let i = 0; i < signatureByEntryIndex.length; i++) {
+                        const signature = signatureByEntryIndex[i];
+                        const transition = batchResult.timelines.get(`battle:${signature}`);
+                        if (transition) {
+                            // Adapt SourceTransitionResult -> CreateChildNodeResult
+                            // so the existing writeBattleReport/history code works.
+                            const timeline: CreateChildNodeResult = {
+                                nodeId: transition.targetNodeId,
+                                parentId: transition.context.timelineParentId ?? null,
+                                script: transition.script,
+                                context: transition.context,
+                                createdNewRoot: false
+                            };
+                            timelineBySignature.set(signature, timeline);
+                            attemptIdBySignature.set(signature, transition.attemptId);
+                            console.log(`Timeline node created for battle ${signature}: ${timeline.nodeId} (parent: ${timeline.parentId ?? 'null'}, attempt: ${transition.attemptId}, reused: ${transition.reused})`);
+                        }
+                    }
+                } catch (error) {
+                    if (error instanceof TimelineRegistryCorruptError) {
+                        reportCorruptTimelineRegistry(error);
+                    } else if (error instanceof UnsupportedTimelineSchemaError) {
+                        reportUnsupportedTimelineSchema(error.schema);
+                    } else {
+                        throw error;
+                    }
+                }
+            }
+
             let lastReport: string | null = null;
+
+            const resolveAttemptId = (signature: string): string => {
+                const existing = attemptIdBySignature.get(signature);
+                if (existing) {
+                    return existing;
+                }
+                // A coordinator can deliberately drop a battle when its
+                // snapshot is insufficient to order a timeline transition.
+                // Delivery must still proceed; writeBattleReport emits a
+                // delivery-id-guarded, non-committing script for this case.
+                const fallbackAttemptId = randomUUID();
+                attemptIdBySignature.set(signature, fallbackAttemptId);
+                console.warn(
+                    `[BattleReport] No timeline attempt for ${signature}; delivering without a checkpoint transition (attempt: ${fallbackAttemptId}).`
+                );
+                return fallbackAttemptId;
+            };
 
             try {
                 for (const battleData of pending) {
-                    const signature = this.getBattleSignature(battleData);
+                    const signature = signatureByBattle.get(battleData)!;
                     const fallbackReport = this.buildFallbackReport(battleData, gameData);
-                    this.writeBattleReport(fallbackReport, userFolderPath, battleData);
+                    const timeline = timelineBySignature.get(signature) ?? null;
+                    const attemptId = resolveAttemptId(signature);
+                    const identity = identityBySignature.get(signature);
+                    const sourceRecordId = sourceRecordIdBySignature.get(signature);
+                    const battleGameDate = resolveBattleReportGameDate(
+                        battleData.date,
+                        gameData?.gameDate
+                    );
+                    await this.writeBattleReport(fallbackReport, userFolderPath, battleData, timeline?.context.checkpointEpoch ?? this.getNextCheckpointEpoch(battleData, gameData), timeline, attemptId, identity, sourceRecordId, battleGameDate, 'fallback', gameData);
                     battleReportStatuses.set(battleData.slotId, {
                         slotId: battleData.slotId, date: battleData.date, location: battleData.location,
                         winnerName: battleData.winnerName, loserName: battleData.loserName, result: battleData.result,
@@ -218,7 +462,7 @@ export class BattleReportGenerator {
             }
 
             for (const battleData of pending) {
-                const signature = this.getBattleSignature(battleData);
+                const signature = signatureByBattle.get(battleData)!;
                 try {
                     const promptText = this.buildBattleReportPrompt(battleData, gameData, militarySnapshot);
                     console.log(`Generated battle report prompt for ${battleData.slotId}: ${promptText.substring(0, 200)}...`);
@@ -246,7 +490,15 @@ export class BattleReportGenerator {
                     }
 
                     const report = this.normalizeReport(response);
-                    this.writeBattleReport(report, userFolderPath, battleData);
+                    const timeline = timelineBySignature.get(signature) ?? null;
+                    const attemptId = resolveAttemptId(signature);
+                    const identity = identityBySignature.get(signature);
+                    const sourceRecordId = sourceRecordIdBySignature.get(signature);
+                    const battleGameDate = resolveBattleReportGameDate(
+                        battleData.date,
+                        gameData?.gameDate
+                    );
+                    await this.writeBattleReport(report, userFolderPath, battleData, timeline?.context.checkpointEpoch ?? this.getNextCheckpointEpoch(battleData, gameData), timeline, attemptId, identity, sourceRecordId, battleGameDate, 'generated', gameData);
                     const existing = battleReportStatuses.get(battleData.slotId);
                     battleReportStatuses.set(battleData.slotId, {
                         ...existing, slotId: battleData.slotId, date: battleData.date, location: battleData.location,
@@ -268,6 +520,9 @@ export class BattleReportGenerator {
 
             return lastReport;
         } catch (error) {
+            if (error instanceof TimelineRegistryCorruptError) {
+                reportCorruptTimelineRegistry(error);
+            }
             console.error(`Error generating battle report: ${error}`);
             return null;
         }
@@ -310,12 +565,58 @@ export class BattleReportGenerator {
                         loserId: "",
                         loserName: "",
                         delayDays,
+                        sideResults: [],
                         commanders: [],
                         notableCharacters: [],
                         tags: new Set<string>()
                     };
                     break;
                 }
+                case "delivery_id":
+                    if (!currentBattleData) break;
+                    // §10.1: Mod-emitted per-battle occurrence evidence.
+                    // `VOTC:BATTLE_REPORT/;/delivery_id/;/slot/;/id`
+                    if (parts[2] === currentBattleData.slotId) {
+                        const parsed = this.parseNumber(parts[3]);
+                        if (parsed !== undefined && parsed > 0) {
+                            currentBattleData.battleDeliveryId = parsed;
+                            if (currentBattleData.campaignDeliveryId !== undefined
+                                && currentBattleData.campaignDeliveryId !== parsed) {
+                                console.warn(`[BattleReport] campaign/delivery_id mismatch for ${currentBattleData.slotId}: campaign=${currentBattleData.campaignDeliveryId}, delivery_id=${parsed}; refusing the campaign identity.`);
+                                currentBattleData.campaignIdentity = undefined;
+                            }
+                        }
+                    } else {
+                        console.warn(`[BattleReport] delivery_id line slot mismatch: line slot "${parts[2]}" != current slot "${currentBattleData.slotId}", falling back to facts signature for this battle`);
+                    }
+                    break;
+                case "campaign":
+                    if (!currentBattleData) break;
+                    try {
+                        const campaign = parseBattleReportCampaignIdentityPayload(
+                            parts.slice(1),
+                            currentBattleData.playerId
+                        );
+                        if (currentBattleData.battleDeliveryId !== undefined
+                            && currentBattleData.battleDeliveryId !== campaign.deliveryId) {
+                            console.warn(`[BattleReport] campaign/delivery_id mismatch for ${currentBattleData.slotId}: campaign=${campaign.deliveryId}, delivery_id=${currentBattleData.battleDeliveryId}; refusing the campaign identity.`);
+                            break;
+                        }
+                        currentBattleData.campaignIdentity = campaign.identity;
+                        currentBattleData.campaignDeliveryId = campaign.deliveryId;
+                    } catch (error) {
+                        console.warn(`[BattleReport] Invalid campaign identity for ${currentBattleData.slotId}: ${error}`);
+                    }
+                    break;
+                case "checkpoint":
+                    if (!currentBattleData) break;
+                    currentBattleData.timelineCheckpoint = parseTimelineSnapshot(parts.slice(2), 'battle');
+                    if (currentBattleData.timelineCheckpoint.status === 'invalid') {
+                        console.warn(`Unusable battle checkpoint line for ${currentBattleData.slotId}: ${currentBattleData.timelineCheckpoint.reason}`);
+                    } else if (currentBattleData.timelineCheckpoint.status === 'truncated') {
+                        console.warn(`Unusable battle checkpoint line for ${currentBattleData.slotId}: truncated, expected ${currentBattleData.timelineCheckpoint.expected} fields, got ${currentBattleData.timelineCheckpoint.actual}`);
+                    }
+                    break;
                 case "init_location":
                     if (!currentBattleData) break;
                     currentBattleData.location = this.cleanBattleLogText(parts[2]);
@@ -337,6 +638,20 @@ export class BattleReportGenerator {
                     currentBattleData.percentEnemiesKilled = this.parseNumber(parts[2]);
                     currentBattleData.delayDays = this.parseNumber(parts[3]) ?? currentBattleData.delayDays;
                     break;
+                case "side_result": {
+                    if (!currentBattleData || !parts[2]) break;
+                    const initialTroops = this.parseNumber(parts[3]);
+                    const lostTroops = this.parseNumber(parts[4]);
+                    const survivingTroops = this.parseNumber(parts[5]);
+                    if (initialTroops === undefined || lostTroops === undefined || survivingTroops === undefined) break;
+                    currentBattleData.sideResults.push({
+                        participantId: parts[2],
+                        initialTroops,
+                        lostTroops,
+                        survivingTroops
+                    });
+                    break;
+                }
                 case "troops":
                     if (!currentBattleData) break;
                     currentBattleData.totalTroops = this.parseNumber(parts[2]);
@@ -585,7 +900,7 @@ ${getEffectivePrompts(this.config, this.userDataPath, gameData!)?.battleReportPr
             .join(language === "en" ? "; " : "；");
     }
 
-    private writeBattleReport(reportContent: string, userFolderPath: string, battleData: BattleReportData): void {
+    private async writeBattleReport(reportContent: string, userFolderPath: string, battleData: BattleReportData, checkpointEpoch?: number, timeline: CreateChildNodeResult | null = null, attemptId: string = randomUUID(), identity?: CampaignPlayerIdentity, sourceRecordId?: string, gameDate?: import("../../shared/gameData/gameDate").Ck3GameDate, generationStatus: 'fallback' | 'generated' = 'generated', gameData?: GameData): Promise<void> {
         const runFolderPath = path.join(userFolderPath, "run");
         if (!fs.existsSync(runFolderPath)) {
             fs.mkdirSync(runFolderPath, { recursive: true });
@@ -595,32 +910,137 @@ ${getEffectivePrompts(this.config, this.userDataPath, gameData!)?.battleReportPr
         const slotNumber = this.getSlotNumber(battleData.slotId);
         const battleReportFilePath = path.join(runFolderPath, `battle_report${slotNumber}.txt`);
         const escapedReport = this.escapeForCk3Script(reportContent);
-        const gameCommand = `send_interface_message = {
-	type = votc_message_popup
-	title = votc_battle_report_message_title
-	desc = "${escapedReport}"
-}
-create_artifact = {
-	name = votc_battle_report_message_title
-	description = "${escapedReport}"
-	type = journal
-	visuals = scroll
-	creator = root
-	modifier = artifact_monthly_minor_prestige_1_modifier
-}
-remove_global_variable ?= votc_battle_report_${slotNumber}
-remove_variable ?= votc_battle_report_${slotNumber}_timer
-remove_variable ?= votc_battle_report_${slotNumber}_sent_day
-remove_global_variable ?= votc_battle_report_pending
-remove_global_variable ?= votc_battle_report_pending_valid`;
+        let commit: BattleCommitTarget | undefined;
+        if (timeline && checkpointEpoch !== undefined) {
+            const observed = this.observedBattleState(battleData);
+            const targetNode = parseNodeId(timeline.nodeId);
+            const graphParent = timeline.parentId ? parseNodeId(timeline.parentId) : undefined;
+            commit = {
+                targetEpoch: checkpointEpoch,
+                transitionToken: timeline.context.checkpointToken,
+                observedEpoch: observed?.epoch,
+                observedNodeA: observed?.nodeA ?? 0,
+                observedNodeB: observed?.nodeB ?? 0,
+                observedParentA: observed?.parentA,
+                observedParentB: observed?.parentB,
+                observedToken: observed?.checkpointToken,
+                targetNodeA: targetNode?.a ?? 0,
+                targetNodeB: targetNode?.b ?? 0,
+                graphParentA: graphParent?.a ?? 0,
+                graphParentB: graphParent?.b ?? 0,
+                deliveryId: battleData.battleDeliveryId !== undefined
+                    ? String(battleData.battleDeliveryId)
+                    : undefined
+            };
+        }
+        const gameCommand = buildBattleReportRunScript({
+            slotNumber,
+            attemptId,
+            playerId: battleData.playerId || '0',
+            escapedReport,
+            commit,
+            battleDeliveryId: battleData.battleDeliveryId
+        });
 
         fs.writeFileSync(battleReportFilePath, gameCommand, "utf8");
         console.log(`Battle report written to: ${battleReportFilePath}`);
+
+        await this.saveBattleReportHistory(reportContent, battleData, checkpointEpoch, timeline, attemptId, identity, sourceRecordId, gameDate, generationStatus, gameData);
 
         if (battleData.legacySingleSlot) {
             const legacyBattleReportFilePath = path.join(runFolderPath, "battle_report.txt");
             fs.writeFileSync(legacyBattleReportFilePath, gameCommand, "utf8");
             console.log(`Legacy battle report written to: ${legacyBattleReportFilePath}`);
+        }
+    }
+
+    private async saveBattleReportHistory(reportContent: string, battleData: BattleReportData, checkpointEpoch?: number, timeline: CreateChildNodeResult | null = null, attemptId?: string, identity?: CampaignPlayerIdentity, sourceRecordId?: string, gameDate?: import("../../shared/gameData/gameDate").Ck3GameDate, generationStatus: 'fallback' | 'generated' = 'generated', gameData?: GameData): Promise<boolean> {
+        try {
+            // Identity is threaded in from the batch capture at
+            // generateBattleReport start. Do NOT re-resolve here. Schema v1
+            // records fail closed: without identity, timeline node, epoch,
+            // sourceRecordId or structured date no history is written at all
+            // (never a player-only or empty-anchor record).
+            if (!identity) {
+                console.warn(`Skipping battle report history for ${battleData.slotId}: no campaign identity captured for this batch.`);
+                return false;
+            }
+            if (!timeline || checkpointEpoch === undefined || !sourceRecordId || !gameDate) {
+                console.warn(
+                    `[BattleReport] Skipping schema v1 history for ${battleData.slotId}: ` +
+                    `missing required context (timeline=${Boolean(timeline)}, epoch=${checkpointEpoch}, ` +
+                    `sourceRecordId=${Boolean(sourceRecordId)}, gameDate=${Boolean(gameDate)}).`
+                );
+                return false;
+            }
+            const historyFilePath = campaignBattleReportHistoryPath(app.getPath('userData'), identity);
+
+            const signature = this.getBattleSignature(battleData);
+            const dedupKey = `${signature}@${timeline.nodeId}`;
+            const record = buildBattleReportHistoryRecord({
+                id: signature,
+                dedupKey,
+                location: battleData.location,
+                ...(battleData.terrain !== undefined ? { terrain: battleData.terrain } : {}),
+                ...(battleData.winter !== undefined ? { winter: battleData.winter } : {}),
+                ...(battleData.result !== undefined ? { result: battleData.result } : {}),
+                ...(battleData.winningSide !== undefined ? { winningSide: battleData.winningSide } : {}),
+                winnerId: battleData.winnerId,
+                winnerName: this.cleanBattleLogText(battleData.winnerName),
+                loserId: battleData.loserId,
+                loserName: this.cleanBattleLogText(battleData.loserName),
+                sideResults: battleData.sideResults,
+                commanders: battleData.commanders,
+                notableCharacters: battleData.notableCharacters,
+                tags: [...battleData.tags],
+                content: reportContent,
+                generationStatus,
+                displayDate: battleData.date,
+                gameDate,
+                checkpointEpoch,
+                timeline,
+                identity,
+                sourceRecordId,
+                characterResolver: (characterId: number) => gameData?.characters.get(characterId)
+            });
+
+            await updateJsonArrayAtomic<unknown>(
+                historyFilePath,
+                (value) => {
+                    if (!Array.isArray(value)) {
+                        throw new Error('existing battle report history file is not an array');
+                    }
+                    return value;
+                },
+                (records) => {
+                    const existingIndex = records.findIndex(entry => matchesBattleDedupKey(entry, dedupKey));
+                    if (existingIndex >= 0 && isBattleReportHistoryRecordV1(records[existingIndex])) {
+                        // Fallback -> final update: only content and status may
+                        // change; anchor/facts/snapshots/createdAt stay frozen.
+                        records[existingIndex] = applyBattleReportContentUpdate(
+                            records[existingIndex],
+                            reportContent,
+                            generationStatus
+                        );
+                        return records;
+                    }
+                    if (existingIndex >= 0) {
+                        // Legacy entry upgrade: replace with the v1 record but
+                        // preserve the original createdAt.
+                        records[existingIndex] = {
+                            ...record,
+                            createdAt: (records[existingIndex] as { createdAt?: string }).createdAt ?? record.createdAt
+                        };
+                        return records;
+                    }
+                    return [...records, record];
+                }
+            );
+            console.log(`Battle report history saved to: ${historyFilePath}`);
+            return true;
+        } catch (error) {
+            console.error(`Failed to save battle report history: ${error}`);
+            return false;
         }
     }
 
@@ -659,6 +1079,10 @@ remove_global_variable ?= votc_battle_report_pending_valid`;
             battleData.location,
             battleData.winnerId,
             battleData.loserId,
+            battleData.sideResults
+                .map(result => `${result.participantId}:${result.initialTroops}:${result.lostTroops}:${result.survivingTroops}`)
+                .sort()
+                .join(","),
             Array.from(battleData.tags).sort().join(","),
             battleData.notableCharacters
                 .map(character => `${character.type}:${character.id}:${character.name}`)
@@ -731,12 +1155,33 @@ remove_global_variable ?= votc_battle_report_pending_valid`;
     private cleanBattleLogText(value: string | undefined): string {
         if (!value) return "";
 
-        const cleaned = value.trim();
+        const cleaned = removeTooltip(value).trim();
         if (!cleaned || /^(none|null|undefined)$/i.test(cleaned)) {
             return "";
         }
 
         return cleaned;
+    }
+
+    private getNextCheckpointEpoch(battleData: BattleReportData, gameData: GameData | undefined): number | undefined {
+        const currentEpoch = this.getCurrentCheckpointEpoch(battleData, gameData);
+        return currentEpoch === undefined ? undefined : currentEpoch + 1;
+    }
+
+    private observedBattleState(battleData: BattleReportData): ObservedTimelineState | undefined {
+        const result = battleData.timelineCheckpoint;
+        if (!result) return undefined;
+        if (result.status === 'valid' || result.status === 'legacy') return result.snapshot;
+        return undefined;
+    }
+
+    private buildBattleTimelineContext(battleData: BattleReportData, gameData: GameData | undefined): TimelineContext {
+        const playerId = battleData.playerId || (gameData ? String(gameData.playerID) : 'unknown');
+        return buildContextFromBattleCheckpoint(playerId, battleData.timelineCheckpoint, gameData);
+    }
+
+    private getCurrentCheckpointEpoch(battleData: BattleReportData, gameData: GameData | undefined): number | undefined {
+        return this.observedBattleState(battleData)?.epoch ?? gameData?.votcCheckpointEpoch;
     }
 
     private isNotableBattleCharacterType(value: string | undefined): value is NotableBattleCharacterType {

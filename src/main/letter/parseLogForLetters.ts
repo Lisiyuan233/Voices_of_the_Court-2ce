@@ -2,6 +2,7 @@ import fs from 'fs';
 import { Letter } from './Letter.js';
 import { LetterManager } from './LetterManager.js';
 import { GameData } from '../../shared/gameData/GameData.js';
+import { resolveLetterTimelineContextFromGameData } from './letterTimelineContext.js';
 
 function totalDaysToDateString(totalDays: number): string {
     const year = Math.floor(totalDays / 365);
@@ -25,6 +26,10 @@ function totalDaysToDateString(totalDays: number): string {
 
 export async function parseLettersFromLog(debugLogPath: string, gameData: GameData, gameDate: string, playerId?: string, recipientId?: string): Promise<Letter[]> {
     console.log(`Starting to parse log file for letters at: ${debugLogPath}`);
+    // F21: derive the timeline context (campaign identity + current node)
+    // from the same snapshot the letters were parsed from, so imported
+    // letters land in the campaign namespace with full lineage stamps.
+    const letterContext = resolveLetterTimelineContextFromGameData(gameData);
 
     if (!fs.existsSync(debugLogPath)) {
         console.error(`Error: Log file not found at ${debugLogPath}`);
@@ -85,7 +90,7 @@ export async function parseLettersFromLog(debugLogPath: string, gameData: GameDa
                             letter.votcCheckpointEpoch = gameData.votcCheckpointEpoch;
                             letters.push(letter);
                             // The player is the sender of the letter being imported from the log
-                            LetterManager.getInstance().saveLetter(letter, senderIdFromLog);
+                            LetterManager.getInstance().saveLetter(letter, senderIdFromLog, letterContext);
                         }
                     } else {
                         console.error(`Could not find sender (${senderIdFromLog}) or recipient (${recipientIdFromLog}) in gameData for letter.`);

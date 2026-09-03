@@ -150,6 +150,44 @@ fn open_request(fingerprint: &str, max_characters: u64) -> String {
 }
 
 #[test]
+fn open_scans_nested_landed_titles_from_real_119_layout() {
+    // 真实 1.19 存档把 title 记录嵌套在第二层 landed_titles 块中（第一层
+    // 只有 dynamic_templates）；回归：此前 titleCount 恒为 0 且无 warning。
+    let dir = TempDir::new("sidx-nested-titles");
+    let living = common::living_block(&char_entry("1001", "\t\tfirst_name=\"Aldric\"\n"));
+    let inner = format!(
+        "landed_titles={{\n{}}}\n",
+        "\t8001={\n\t\tkey=\"e_test_empire\"\n\t\tholder=1001\n\t\tcolor=rgb { 71 3 1 }\n\t}\n"
+    );
+    let titles = common::landed_titles_block(&format!("\tdynamic_templates={{}}\n{inner}"));
+    let body = common::gamestate_blocks(&common::default_vars(1000), &format!("{living}{titles}"));
+    let meta_len = body.find("}\n").map(|i| i + 2).unwrap_or(body.len());
+    let mut content = common::sav_header_line(0, meta_len);
+    content.extend_from_slice(body.as_bytes());
+    let input = common::write_file(dir.path(), "nested-titles.ck3", &content);
+    let fingerprint = fingerprint_of(&input, dir.path());
+
+    let mut proc = SessionProc::spawn(&input, dir.path());
+    proc.send_line(&open_request(&fingerprint, 10000));
+    let frame: serde_json::Value =
+        serde_json::from_str(&proc.read_frame()).expect("open response JSON");
+    assert_eq!(frame["status"], "ready", "{frame}");
+    assert_eq!(frame["index"]["livingCharacterCount"], 1);
+    assert_eq!(frame["index"]["titleCount"], 1);
+    assert!(
+        frame["index"]["warningCodes"].as_array().unwrap().is_empty(),
+        "no warnings expected: {frame}"
+    );
+
+    proc.send_line(&close_request_line("sess-index-0001"));
+    let close: serde_json::Value =
+        serde_json::from_str(&proc.read_frame()).expect("close response");
+    assert_eq!(close["status"], "closed");
+    let output = proc.wait();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
 fn open_reports_real_bounded_index_counts() {
     let dir = TempDir::new("sidx-counts");
     let input = write_rich_save(&dir, "rich.ck3");

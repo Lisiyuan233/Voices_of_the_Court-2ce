@@ -7,6 +7,7 @@ import { RunFileManager } from '../RunFileManager.js';
 import { SummaryFileWatcher } from './SummaryFileWatcher.js';
 import { LetterManager } from '../letter/LetterManager.js';
 import { Letter as ILetter } from '../letter/letterInterfaces.js';
+import { resolveLetterTimelineContextFromGameData } from '../letter/letterTimelineContext.js';
 import { Config } from '../../shared/Config.js';
 import { ApiConnection} from '../../shared/apiConnection.js';
 import { checkActions } from './checkActions.js';
@@ -25,6 +26,18 @@ import {Message, MessageChunk, ErrorMessage, Summary, Action, ActionResponse, Pe
 import { parseGameDate } from '../../shared/dateUtils.js';
 import { listPromptTranscriptFiles } from '../conversationHistory.js';
 import { archiveFutureSummaryFilesForPlayer, filterSummariesForCheckpoint } from '../summaryManager.js';
+import {
+    ensureFlatConversationSummariesMigrated,
+    ensureSummaryStoreDirs,
+    effectiveSummaryTarget,
+    readCharacterSummariesUnion,
+    readSummaryCharacterMapObject,
+    summaryRecordDedupKey,
+    writeCharacterSummaries,
+    writeSummaryCharacterMap,
+    type SummaryStoreContext,
+    type SummaryStoreRouting
+} from './summaryCampaignStore.js';
 import { getSimilarity } from '../../shared/stringUtils.js';
 import { createEmptyConversationFactContext, type ConversationFactContext } from '../saveFacts/saveFactTypes.js';
 import { parseVariables } from '../parseVariables.js';
@@ -38,7 +51,7 @@ import { UnsupportedTimelineSchemaError } from '../../shared/gameData/timelinePr
 import { requireCampaignIdentity, CampaignIdentityUnavailableError } from '../campaignIdentityResolver.js';
 import { reportCampaignIdentityUnavailable, reportCorruptTimelineRegistry, reportTimelineParentNotFound, reportUnsupportedTimelineSchema } from '../timelineRegistryRecovery.js';
 import { runConversationTimelineTransition } from '../timelineBusinessWire.js';
-import { conversationHistoryDir as campaignConversationHistoryDir } from '../campaignDataPaths.js';
+import { conversationHistoryDir as campaignConversationHistoryDir, campaignRoot } from '../campaignDataPaths.js';
 
 // Fallback close effect used when the timeline transition fails: closes the
 // CK3 conversation window WITHOUT advancing checkpoint state. Mirrors the
@@ -76,6 +89,10 @@ export class Conversation{
     actionsApiConnection: ApiConnection;
     actions!: Action[];
     summaries: Map<number, Summary[]>;
+    // F24: effective watch target per character (campaign store path when an
+    // identity was captured, legacy flat path otherwise). The close path
+    // pauses/resumes the watcher on exactly this file.
+    private summaryWatchPaths: Map<number, string>;
     currentSummary: string;
     summaryFileWatcher: SummaryFileWatcher; // 文件监控器
     letterManager: LetterManager;
@@ -159,6 +176,7 @@ export class Conversation{
         }
 
         this.summaries = new Map<number, Summary[]>();
+        this.summaryWatchPaths = new Map<number, string>();
         this.summaryFileWatcher = new SummaryFileWatcher(); // 初始化文件监控器
         this.letterManager = LetterManager.getInstance();
         this.letters = new Map<number, ILetter[]>();
@@ -224,52 +242,89 @@ export class Conversation{
         fs.writeFileSync(characterMapPath, JSON.stringify(characterMap, null, '\t'));
         console.log(`Character map updated at ${characterMapPath}`);
 
-        const summariesBasePath = path.join(this.userDataPath, 'conversation_summaries');
-        if (!fs.existsSync(summariesBasePath)){
-            fs.mkdirSync(summariesBasePath);
-            console.log('Created conversation_summaries directory.');
+        // F24: every conversation_summaries path is derived through the
+        // summaryCampaignStore exit — campaign namespace when an identity was
+        // captured, legacy flat layout otherwise. No hand-joined paths here.
+        const summaryRoutingBase = {
+            votcDataRoot: this.userDataPath,
+            userDataDir: app.getPath('userData'),
+            playerId: String(this.gameData.playerID)
+        };
+        ensureSummaryStoreDirs(summaryRoutingBase, this.campaignIdentity);
+
+        // F24: one-shot flat -> campaign conversation_summaries migration
+        // (marker + backup + ambiguous fail-safe), at most once per
+        // campaign|player per process. Fire-and-forget: the union read below
+        // dedupes by record key, so a concurrent migration cannot duplicate
+        // or lose records.
+        if (this.campaignIdentity) {
+            void ensureFlatConversationSummariesMigrated(app.getPath('userData'), this.campaignIdentity).catch(() => undefined);
         }
 
-        const playerSummaryPath = path.join(summariesBasePath, this.gameData.playerID.toString());
-        if (!fs.existsSync(playerSummaryPath)){
-            fs.mkdirSync(playerSummaryPath);
-            console.log(`Created player-specific summary directory for player ID: ${this.gameData.playerID}`);
-        }
-        
         // Archive future summaries for the current checkpoint epoch
         archiveFutureSummaryFilesForPlayer(this.userDataPath, String(this.gameData.playerID), this.gameData.votcCheckpointEpoch, 'conversation_open_checkpoint_filter');
         // Same trigger for diary records (timeline v2): a save rollback leaves
         // future-epoch diary entries/summaries behind; archive rather than delete.
         archiveFutureDiaryRecordsForPlayer(String(this.gameData.playerID), this.gameData.votcCheckpointEpoch, 'conversation_open_checkpoint_filter');
 
+        // F21/F24: single derivation channel for the timeline context
+        // (identity + registry + current node) shared by the letter thread
+        // read and the session summaries assembly below.
+        const summaryTimelineContext = resolveLetterTimelineContextFromGameData(this.gameData);
+        const sessionSummaryContext: SummaryStoreContext = {
+            identity: this.campaignIdentity,
+            checkpointEpoch: this.gameData.votcCheckpointEpoch,
+            registry: summaryTimelineContext.registry,
+            currentNodeId: summaryTimelineContext.currentNodeId
+        };
+
         // Load summaries for all non-player characters
         this.gameData.characters.forEach((character) => {
             if (character.id !== this.gameData.playerID) {
-                const summaryFilePath = path.join(playerSummaryPath, `${character.id.toString()}.json`);
-                let characterSummaries: Summary[] = [];
-                if (fs.existsSync(summaryFilePath)) {
-                    try {
-                        characterSummaries = JSON.parse(fs.readFileSync(summaryFilePath, 'utf8'));
-                        characterSummaries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-                        console.log(`Loaded and sorted ${characterSummaries.length} prior summaries for AI ID ${character.id} from ${summaryFilePath}.`);
-                    } catch (e) {
-                        console.error(`Error parsing summary file for AI ID ${character.id}: ${e}`);
-                    }
-                } else {
-                    fs.writeFileSync(summaryFilePath, JSON.stringify([], null, '\t'));
-                    console.log(`No prior summaries found for AI ID ${character.id}. Initialized empty summaries file at ${summaryFilePath}.`);
-                }
-                const filteredSummaries = filterSummariesForCheckpoint(characterSummaries, this.gameData.votcCheckpointEpoch);
-                this.summaries.set(character.id, filteredSummaries);
+                const routing: SummaryStoreRouting = { ...summaryRoutingBase, characterId: character.id.toString() };
 
-                // 设置文件监控，当文件变化时自动重新加载
-                this.summaryFileWatcher.watchFile(summaryFilePath, (updatedSummaries: Summary[]) => {
-                    const filteredUpdatedSummaries = filterSummariesForCheckpoint(updatedSummaries, this.gameData.votcCheckpointEpoch);
-                    this.summaries.set(character.id, filteredUpdatedSummaries);
+                // F24 campaign-aware assembly: union of the campaign store and
+                // the legacy flat store (campaign copy authoritative on dedupe),
+                // filtered by graph visibility for anchored records and by
+                // `epoch <= checkpoint` for legacy epoch-only records. Without
+                // an identity this degrades to the pre-F24 flat read.
+                const characterSummaries = readCharacterSummariesUnion(routing, sessionSummaryContext);
+
+                // The watcher needs an existing file: ensure the EFFECTIVE
+                // write-scope file exists (campaign scope with identity, flat
+                // scope otherwise) — this replaces the old flat-only init.
+                const watchTarget = effectiveSummaryTarget(routing, this.campaignIdentity);
+                if (!fs.existsSync(watchTarget.filePath)) {
+                    fs.mkdirSync(path.dirname(watchTarget.filePath), { recursive: true });
+                    fs.writeFileSync(watchTarget.filePath, JSON.stringify([], null, '\t'));
+                    console.log(`Initialized empty summaries file at ${watchTarget.filePath} (${watchTarget.scope} scope).`);
+                }
+                console.log(`Loaded ${characterSummaries.length} prior summaries for AI ID ${character.id} from ${watchTarget.scope} store.`);
+                this.summaries.set(character.id, characterSummaries);
+                this.summaryWatchPaths.set(character.id, watchTarget.filePath);
+
+                // 设置文件监控，当文件变化时自动重新加载（监控实际生效的文件）
+                this.summaryFileWatcher.watchFile(watchTarget.filePath, (updatedSummaries: Summary[]) => {
+                    if (this.campaignIdentity) {
+                        // Campaign scope: re-run the union assembly so the
+                        // legacy fallback keeps contributing on reloads.
+                        this.summaries.set(character.id, readCharacterSummariesUnion(routing, sessionSummaryContext));
+                    } else {
+                        const filteredUpdatedSummaries = filterSummariesForCheckpoint(updatedSummaries, this.gameData.votcCheckpointEpoch);
+                        this.summaries.set(character.id, filteredUpdatedSummaries);
+                    }
                     console.log(`Automatically reloaded summaries for character ID ${character.id} due to file change`);
                 });
 
-                const characterLetters = this.letterManager.getLetters(String(this.gameData.playerID), String(character.id), this.gameData.votcCheckpointEpoch);
+                // F21: pass the timeline context (campaign identity + current
+                // node) so the letter thread read filters anchored records by
+                // graph visibility and legacy records by epoch.
+                const characterLetters = this.letterManager.getLetters(
+                    String(this.gameData.playerID),
+                    String(character.id),
+                    this.gameData.votcCheckpointEpoch,
+                    resolveLetterTimelineContextFromGameData(this.gameData)
+                );
                 this.letters.set(character.id, characterLetters);
                 console.log(`Loaded ${characterLetters.length} letters for AI ID ${character.id}.`);
             }
@@ -1924,9 +1979,15 @@ ${timelineLines}
         // (1.x Conversation.ts:2803-2810).
         const allCharacterIds = Array.from(this.gameData.characters.keys());
         const characterIdsString = allCharacterIds.join('_');
+        // Embed the close-transition node id (`_tl_<a>-<b>_`) so the history
+        // viewer can apply graph-branch visibility: a checkpoint epoch alone
+        // cannot distinguish sibling transcripts created after a save rollback,
+        // which made the abandoned branch's conversations show up as if they
+        // leaked across saves. Untagged files keep the epoch-filter fallback.
+        const nodeIdSegment = timeline?.nodeId ? `_tl_${timeline.nodeId}` : '';
         const historyFile = path.join(
             historyDir,
-            `${characterIdsString}_ckpt${nextCheckpointEpoch}_${new Date().getTime()}.txt`
+            `${characterIdsString}_ckpt${nextCheckpointEpoch}${nodeIdSegment}_${new Date().getTime()}.txt`
         );
         fs.writeFileSync(historyFile, textContent);
         console.log(`Conversation history saved to: ${historyFile}`)
@@ -1937,23 +1998,23 @@ ${timelineLines}
             return;
         }
 
-        const summaryDirForMap = path.join(this.userDataPath, 'conversation_summaries', this.gameData.playerID.toString());
-        const characterMapPath = path.join(summaryDirForMap, '_character_map.json');
-        let characterMap: {[key: number]: string} = {};
-        if (fs.existsSync(characterMapPath)) {
-            try {
-                characterMap = JSON.parse(fs.readFileSync(characterMapPath, 'utf8'));
-            } catch (e) {
-                console.error('Error reading existing character map:', e);
-            }
-        }
+        // F24: character map routed through the summary store exit. The
+        // campaign map is the authoritative copy when an identity is active;
+        // the legacy flat map is mirrored by the exit for out-of-scope legacy
+        // readers (diary player listing).
+        const summaryRoutingBase = {
+            votcDataRoot: this.userDataPath,
+            userDataDir: app.getPath('userData'),
+            playerId: String(this.gameData.playerID)
+        };
+        const characterMap = readSummaryCharacterMapObject(summaryRoutingBase, this.campaignIdentity);
         for (const char of this.gameData.characters.values()) {
             if (!characterMap[char.id]) {
                 characterMap[char.id] = char.shortName;
             }
         }
-        fs.writeFileSync(characterMapPath, JSON.stringify(characterMap, null, '\t'));
-        console.log(`Updated character map at: ${characterMapPath}`);
+        writeSummaryCharacterMap(summaryRoutingBase, this.campaignIdentity, characterMap);
+        console.log('Updated summary character map (campaign + legacy scopes).');
 
         // Archive future summaries before saving new ones with the next checkpoint epoch
         archiveFutureSummaryFilesForPlayer(this.userDataPath, String(this.gameData.playerID), nextCheckpointEpoch, 'conversation_summary_save_checkpoint_filter');
@@ -1970,29 +2031,52 @@ ${timelineLines}
             // Do not pass the abortController signal here to ensure summarization is not cancelled.
             const summaryContent = await this.summarizationApiConnection.complete(prompt, false, {});
 
+            // F24: full lineage stamps — campaign id / node / parent derive
+            // from the close transition captured above; when it failed (or the
+            // mod is legacy) the stamp degrades to epoch-only (legacy
+            // visibility), mirroring the diary stamping semantics.
             const newSummary: Summary = {
                 date: this.gameData.date,
                 content: summaryContent,
-                votcCheckpointEpoch: nextCheckpointEpoch
+                votcCheckpointEpoch: nextCheckpointEpoch,
+                ...(timeline ? { votcTimelineNodeId: timeline.nodeId } : {}),
+                ...(timeline?.parentId ? { votcTimelineParentId: timeline.parentId } : {}),
+                ...(this.campaignIdentity ? { votcCampaignId: this.campaignIdentity.campaignId } : {})
             };
             console.log(`Generated new summary for conversation from ${character.fullName}'s perspective: ${newSummary.content.substring(0, 100)}...`);
 
-            const summaryDir = path.join(this.userDataPath, 'conversation_summaries', this.gameData.playerID.toString());
-            const summaryFile = path.join(summaryDir, `${character.id.toString()}.json`);
+            const routing = { ...summaryRoutingBase, characterId: character.id.toString() };
+            const watchPath = this.summaryWatchPaths.get(character.id)
+                ?? effectiveSummaryTarget(routing, this.campaignIdentity).filePath;
 
-            this.summaryFileWatcher.pauseWatcher(summaryFile);
+            this.summaryFileWatcher.pauseWatcher(watchPath);
 
             const existingSummaries = this.summaries.get(character.id) || [];
 
             if (newSummary.content.trim()) {
                 existingSummaries.unshift(newSummary);
-                fs.writeFileSync(summaryFile, JSON.stringify(existingSummaries, null, '\t'));
-                console.log(`Saved updated summaries for AI ID ${character.id} to ${summaryFile}. Total summaries: ${existingSummaries.length}`);
+                // F24 write exit: with an identity this merge-writes the
+                // stamped record into the CAMPAIGN store only (the flat layout
+                // is never touched — that is the cross-campaign leak F24
+                // closes) and preserves hidden sibling-branch records already
+                // on disk. Without an identity it is the pre-F24 flat
+                // whole-overwrite.
+                const writtenTarget = await writeCharacterSummaries(routing, this.campaignIdentity, {
+                    legacyReplacement: existingSummaries,
+                    campaignMerge: [newSummary],
+                    stamp: {
+                        checkpointEpoch: nextCheckpointEpoch,
+                        timelineNodeId: timeline?.nodeId,
+                        timelineParentId: timeline?.parentId ?? undefined,
+                        campaignId: this.campaignIdentity?.campaignId
+                    }
+                });
+                console.log(`Saved updated summaries for AI ID ${character.id} to ${writtenTarget.filePath} (${writtenTarget.scope} scope).`);
             } else {
                 console.log(`Skipping saving empty summary for AI ID ${character.id}.`);
             }
 
-            this.summaryFileWatcher.resumeWatcher(summaryFile);
+            this.summaryFileWatcher.resumeWatcher(watchPath);
         }
     }
 
@@ -2373,38 +2457,73 @@ ${timelineLines}
 
     private async checkForSummariesFromOtherPlayers(): Promise<void> {
         console.log('Checking for summaries from other players...');
+        // F24: scan the legacy flat store (pre-F24 behavior, kept so
+        // pre-campaign hot-seat data keeps flowing) and, when a campaign
+        // identity is active, the conversation_summaries stores of the OTHER
+        // players of the SAME campaign. Records stamped with a foreign
+        // campaign id are never imported; identical records already present
+        // in the session view are not imported twice (key dedupe).
         const summariesBasePath = path.join(this.userDataPath, 'conversation_summaries');
-        if (!fs.existsSync(summariesBasePath)) return;
+        const foreignStores: Array<{ playerId: string; dirPath: string }> = [];
+        if (fs.existsSync(summariesBasePath)) {
+            const playerDirs = fs.readdirSync(summariesBasePath, { withFileTypes: true })
+                .filter(dirent => dirent.isDirectory())
+                .map(dirent => dirent.name);
+            for (const playerId of playerDirs) {
+                if (playerId !== this.gameData.playerID.toString()) {
+                    foreignStores.push({ playerId, dirPath: summariesBasePath });
+                }
+            }
+        }
+        if (this.campaignIdentity) {
+            const campaignPlayersDir = path.join(campaignRoot(app.getPath('userData'), this.campaignIdentity), 'players');
+            if (fs.existsSync(campaignPlayersDir)) {
+                for (const dirent of fs.readdirSync(campaignPlayersDir, { withFileTypes: true })) {
+                    if (!dirent.isDirectory()) continue;
+                    if (dirent.name === this.campaignIdentity.playerId) continue;
+                    foreignStores.push({
+                        playerId: dirent.name,
+                        dirPath: path.join(campaignPlayersDir, dirent.name, 'conversation_summaries')
+                    });
+                }
+            }
+        }
 
-        const playerDirs = fs.readdirSync(summariesBasePath, { withFileTypes: true })
-            .filter(dirent => dirent.isDirectory())
-            .map(dirent => dirent.name);
-
-        const otherPlayerIds = playerDirs.filter(id => id !== this.gameData.playerID.toString());
-
-        if (otherPlayerIds.length === 0) {
+        if (foreignStores.length === 0) {
             console.log('No other player summaries found.');
             return;
         }
 
-        console.log(`Found summaries from other players: ${otherPlayerIds.join(', ')}`);
+        console.log(`Found summaries from other players: ${foreignStores.map(s => s.playerId).join(', ')}`);
 
         for (const character of this.gameData.characters.values()) {
             if (character.id === this.gameData.playerID) continue;
 
             let characterSummaries = this.summaries.get(character.id) || [];
+            const seenKeys = new Set(characterSummaries.map(summaryRecordDedupKey));
 
-            for (const playerId of otherPlayerIds) {
-                const summaryFilePath = path.join(summariesBasePath, playerId, `${character.id.toString()}.json`);
+            for (const foreignStore of foreignStores) {
+                const summaryFilePath = path.join(foreignStore.dirPath, `${character.id.toString()}.json`);
                 if (fs.existsSync(summaryFilePath)) {
                     try {
                         const foreignSummaries: Summary[] = JSON.parse(fs.readFileSync(summaryFilePath, 'utf8'));
-                        const summariesToImport = foreignSummaries.map(s => ({
-                            ...s,
-                            fromPlayerId: playerId // Add the player ID
-                        }));
+                        // Cross-campaign guard: a record stamped with another
+                        // campaign's id never leaks into this session.
+                        const importable = foreignSummaries.filter(s =>
+                            !(s && s.votcCampaignId && this.campaignIdentity && s.votcCampaignId !== this.campaignIdentity.campaignId)
+                        );
+                        const summariesToImport = importable
+                            .map(s => ({ ...s, fromPlayerId: foreignStore.playerId }))
+                            .filter(s => {
+                                const key = summaryRecordDedupKey(s);
+                                if (seenKeys.has(key)) return false;
+                                seenKeys.add(key);
+                                return true;
+                            });
                         characterSummaries.push(...summariesToImport);
-                        console.log(`Imported ${summariesToImport.length} summaries for character ${character.id} from player ${playerId}.`);
+                        if (summariesToImport.length > 0) {
+                            console.log(`Imported ${summariesToImport.length} summaries for character ${character.id} from player ${foreignStore.playerId}.`);
+                        }
                     } catch (e) {
                         console.error(`Error reading or parsing summary file ${summaryFilePath}:`, e);
                     }

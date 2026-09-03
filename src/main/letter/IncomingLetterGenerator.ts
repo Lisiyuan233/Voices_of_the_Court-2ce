@@ -73,6 +73,9 @@ const latestSignatureBySlot = new Map<string, string>();
 
 const DEFAULT_INCOMING_LETTER_PROMPT = `请根据你的角色性格、背景、与收信人的关系、相关记忆内容，以及当前的游戏情境，用{{letterLanguage}}写一段由{{senderName}}主动寄给{{playerName}}的简短书信正文。只输出一段纯文本，不要换行、不要引号、不要Markdown格式，总长度控制在200字以内。`;
 
+// F13 (1.x P1-L1): fallback for configs without the maxSummaryTokens key
+// (see Config.ts / default_config.json). The generator reads
+// config.maxSummaryTokens so the budget is user-tunable.
 const INCOMING_LETTER_SUMMARY_TOKEN_BUDGET = 2000;
 
 // KV-cache-friendly stable prefix: fixed rules that never contain names, dates
@@ -252,10 +255,10 @@ export class IncomingLetterGenerator {
 
     // 2CE summaryManager/getEffectivePrompts convention: callers pass the
     // <userData>/votc_data root (see main.ts and LetterReplyGenerator), not
-    // the bare userData dir. Letter summaries stay in the legacy namespace
-    // the rest of the 2CE conversation/letter flow shares (the read-summary
-    // IPC resolves no campaign identity without a manager window context);
-    // the timeline registry only drives branch visibility and merge-save.
+    // the bare userData dir. F21: incoming-letter summaries are routed into
+    // the campaign-scoped conversation_summaries directory whenever the
+    // snapshot carries a v2 identity; the legacy player store remains the
+    // degraded fallback and stays readable through the union read below.
     private getVotcDataRoot(): string {
         return path.join(app.getPath('userData'), 'votc_data');
     }
@@ -264,12 +267,15 @@ export class IncomingLetterGenerator {
     // registry (campaign-scoped when the snapshot carries a v2 identity,
     // player-only legacy fallback otherwise) so summary reads filter
     // node-tagged records by branch and summary saves merge instead of
-    // overwriting hidden sibling-branch records.
-    private getSummaryTimeline(gameData: GameData): { registry: TimelineRegistry | undefined; currentNodeId: string | undefined } {
+    // overwriting hidden sibling-branch records. F21 also exposes the
+    // resolved campaign identity so summary reads/writes route into the
+    // campaign namespace via summaryManager's identity parameter.
+    private getSummaryTimeline(gameData: GameData): { registry: TimelineRegistry | undefined; currentNodeId: string | undefined; identity?: CampaignPlayerIdentity } {
         const persistence = new FsTimelinePersistence(app.getPath('userData'));
         let registry: TimelineRegistry | undefined;
+        let identity: CampaignPlayerIdentity | undefined;
         try {
-            const identity = requireCampaignIdentity({
+            identity = requireCampaignIdentity({
                 playerID: gameData.playerID,
                 timelineSnapshotResult: gameData.timelineSnapshotResult
             });
@@ -277,6 +283,7 @@ export class IncomingLetterGenerator {
             registry = result.status === 'found' ? result.store : undefined;
         } catch {
             // Legacy snapshot: fall back to player-only display load.
+            identity = undefined;
             registry = persistence.loadRegistry(String(gameData.playerID)) ?? undefined;
         }
         const context = registry
@@ -284,7 +291,8 @@ export class IncomingLetterGenerator {
             : buildContextFromGameData(gameData);
         return {
             registry,
-            currentNodeId: context.timelineNodeId
+            currentNodeId: context.timelineNodeId,
+            identity
         };
     }
 
@@ -577,19 +585,35 @@ export class IncomingLetterGenerator {
                 'incoming_letter_summary_checkpoint_filter'
             );
             const summaryTimeline = this.getSummaryTimeline(gameData);
-            const summaries = await readSummaryFile(
+            // F21: union read across the campaign summary store (when an
+            // identity is available) and the legacy player store, so records
+            // written in either namespace feed the prompt. Dedup by summary
+            // id keeps the campaign copy authoritative.
+            const campaignSummaries = summaryTimeline.identity
+                ? await readSummaryFile(
+                    app.getPath('userData'),
+                    String(gameData.playerID),
+                    gameData.votcCheckpointEpoch,
+                    summaryTimeline.registry,
+                    summaryTimeline.currentNodeId,
+                    summaryTimeline.identity
+                )
+                : [];
+            const legacySummaries = await readSummaryFile(
                 userDataPath,
                 String(gameData.playerID),
                 gameData.votcCheckpointEpoch,
                 summaryTimeline.registry,
                 summaryTimeline.currentNodeId
             );
+            const seenSummaryIds = new Set(campaignSummaries.map(s => s.id));
+            const summaries = [...campaignSummaries, ...legacySummaries.filter(s => !s.id || !seenSummaryIds.has(s.id))];
             const senderSummaries = summaries.filter(summary => summary.characterId === String(context.senderId));
             if (senderSummaries.length > 0) {
                 const boundedSummaries = this.buildBoundedChronologicalBlock(
                     `以下是之前与${player.fullName}相关的总结（按时间顺序）：`,
                     senderSummaries.map(summary => `${summary.date}: ${summary.content}`),
-                    INCOMING_LETTER_SUMMARY_TOKEN_BUDGET
+                    this.config.maxSummaryTokens ?? INCOMING_LETTER_SUMMARY_TOKEN_BUDGET
                 );
                 summaryContent = boundedSummaries ? `${boundedSummaries}\n` : '';
             }
@@ -995,13 +1019,20 @@ else = {
         // current branch stay visible; without a registry the fail-closed
         // filter would drop them and the save below would lose them (the
         // pre-merge bug this guards against).
+        // F21: when a campaign identity is available the summary is stored in
+        // the campaign-scoped conversation_summaries directory; the read
+        // targets the same store the merge-save below writes so hidden
+        // sibling-branch records of THAT store survive. The legacy store is
+        // left untouched (still read through the union read in buildMessages).
         const summaryTimeline = this.getSummaryTimeline(gameData);
+        const identity = summaryTimeline.identity;
         const existingSummaries = await readSummaryFile(
-            userDataPath,
+            identity ? app.getPath('userData') : userDataPath,
             String(gameData.playerID),
             gameData.votcCheckpointEpoch,
             summaryTimeline.registry,
-            summaryTimeline.currentNodeId
+            summaryTimeline.currentNodeId,
+            identity
         );
         const senderCharacterId = String(context.senderId);
         const senderSummaries = existingSummaries.filter(summary => summary.characterId === senderCharacterId);
@@ -1015,6 +1046,7 @@ else = {
             votcCheckpointEpoch: gameData.votcCheckpointEpoch + 1,
             votcTimelineNodeId: timeline.nodeId,
             ...(timeline.parentId ? { votcTimelineParentId: timeline.parentId } : {}),
+            ...(identity ? { votcCampaignId: identity.campaignId } : {}),
             id: `summary_${timeline.nodeId}_${new Date().getTime()}`,
             characterName: sender.shortName || sender.fullName,
             sourceType: 'incoming_letter',
@@ -1027,8 +1059,9 @@ else = {
         // stay on disk and summary files of other senders are never deleted.
         await saveSummaryFile(userDataPath, String(gameData.playerID), updatedSummaries, gameData.votcCheckpointEpoch + 1, {
             registry: summaryTimeline.registry,
-            currentNodeId: summaryTimeline.currentNodeId
+            currentNodeId: summaryTimeline.currentNodeId,
+            identity
         });
-        console.log(`[IncomingLetterGenerator] Summary saved for sender ${context.senderId}`);
+        console.log(`[IncomingLetterGenerator] Summary saved for sender ${context.senderId}${identity ? ` (campaign ${identity.campaignId})` : ' (legacy store)'}`);
     }
 }

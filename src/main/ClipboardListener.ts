@@ -61,7 +61,9 @@ export class ClipboardListener extends EventEmitter{
                     this.emit('VOTC:EFFECT_ACCEPTED');
                 break;
                 case "BOOKMARK":
-                    this.emit('VOTC:BOOKMARK');
+                    // Mirrors 1.x: the V2 campaign identity payload rides on
+                    // the bookmark command (F10); handlers validate it.
+                    this.emit('VOTC:BOOKMARK', payloads);
                     break;
                 case "SUMMARY_MANAGER":
                     this.emit('VOTC:SUMMARY_MANAGER', payloads);

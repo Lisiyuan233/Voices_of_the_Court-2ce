@@ -48,12 +48,19 @@ describe('P5 save snapshot protocol (mod2 ce <-> 2CE app)', () => {
         expect(scriptedGui).toContain('votc_save_snapshot_active');
     });
 
-    it('keeps the fail-closed debug gate: only debug_only advertises protocol 1', () => {
-        expect(effects).toContain('debug_only = yes');
-        // Non-debug branch must hard-write the disabled 0/0/0 tail.
-        const elseBlock = effects.slice(effects.indexOf('else = {', effects.indexOf('debug_only = yes')));
-        expect(elseBlock).toContain("set_variable = { name = votc_save_snapshot_protocol value = 0 }");
-        expect(elseBlock).toContain("set_variable = { name = votc_save_snapshot_sequence value = 0 }");
+    it('advertises protocol 1 in both debug and non-debug modes (melt path)', () => {
+        // F17 (mod1 726bb95): non-debug saves are binary and parsed via the
+        // sidecar melt path, so prepare no longer gates on debug_only and no
+        // longer zeroes the tail in an else branch.
+        expect(effects).not.toContain('debug_only = yes');
+        const prepareBlock = effects.slice(
+            effects.indexOf('votc_prepare_save_snapshot_effect = {'),
+            effects.indexOf('votc_clear_save_snapshot_effect = {')
+        );
+        expect(prepareBlock).toContain('change_variable = { name = votc_save_snapshot_sequence add = 1 }');
+        expect(prepareBlock).toContain('set_variable = { name = votc_save_snapshot_protocol value = 1 }');
+        // Only the explicit clear effect resets the protocol tail to 0.
+        expect(prepareBlock).not.toContain("set_variable = { name = votc_save_snapshot_protocol value = 0 }");
         // The probe marker deliberately uses a prefix the VOTC:IN parser ignores.
         expect(effects).toContain('VOTC:SAVE_SNAPSHOT_PROBE/;/STATE/');
     });
@@ -124,7 +131,18 @@ describe('P5 save snapshot protocol (mod2 ce <-> 2CE app)', () => {
         for (const script of [
             'run_test_scripts/votc_test_save_snapshot_prepare.txt',
             'run_test_scripts/votc_test_save_snapshot_read.txt',
-            'run_test_scripts/votc_test_save_snapshot_cleanup.txt'
+            'run_test_scripts/votc_test_save_snapshot_cleanup.txt',
+            // F19: Task 0 regression probes ported from mod1 run_test_scripts.
+            'run_test_scripts/votc_test_save_snapshot_save_text.txt',
+            'run_test_scripts/votc_test_save_snapshot_schedule_non_debug.txt',
+            'run_test_scripts/votc_test_save_snapshot_schedule_save_text_non_debug.txt',
+            'run_test_scripts/votc_test_save_snapshot_sequence_1.txt',
+            'run_test_scripts/votc_test_save_snapshot_sequence_2.txt',
+            'run_test_scripts/votc_test_save_snapshot_sequence_17.txt',
+            'run_test_scripts/votc_test_save_snapshot_sequence_1001.txt',
+            'run_test_scripts/votc_test_save_snapshot_sequence_fraction.txt',
+            'run_test_scripts/votc_test_save_snapshot_sequence_missing.txt',
+            'run_test_scripts/votc_test_save_snapshot_sequence_negative.txt'
         ]) {
             expect(fs.existsSync(path.join(MOD_ROOT, script))).toBe(true);
         }
@@ -143,9 +161,10 @@ describe('P5 save snapshot protocol (mod2 ce <-> 2CE app)', () => {
         const pathSource = readAppFile('src/main/saveFacts/saveParserPath.ts');
         expect(pathSource).toContain('save-parser');
         expect(pathSource).toContain('votc-save-facts.exe');
-        // The forge config must ship the staged binary directory.
+        // The forge config must ship the staged binary directory and the
+        // sidecar third-party notices (F18).
         const forge = readAppFile('forge.config.js');
-        expect(forge).toContain("extraResource: ['./build/save-parser']");
+        expect(forge).toContain("extraResource: ['./build/save-parser', './THIRD_PARTY_NOTICES.md']");
         // And the staging script must exist next to it.
         expect(fs.existsSync(path.join(APP_ROOT, 'build', 'stageSaveParser.js'))).toBe(true);
         expect(fs.existsSync(path.join(APP_ROOT, 'tools', 'votc-save-facts', 'Cargo.toml'))).toBe(true);

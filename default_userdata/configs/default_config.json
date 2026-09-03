@@ -8,6 +8,7 @@
     "maxTokens": 5000,
     "maxMemoryTokens": 600,
     "maxSummaries": 8,
+    "maxSummaryTokens": 2000,
     "percentOfContextToSummarize": 40,
     "selectedDescScript": "standard/pList.js",
     "selectedExMsgScript": "standard/aliChat.js",

@@ -1,4 +1,5 @@
 import {
+    validateSaveFactCapabilitiesResult,
     validateSaveFactExtractionResult,
     SAVE_FACT_RESPONSE_MAX_FACTS,
     SAVE_FACT_RESPONSE_MAX_ENTITIES,
@@ -7,9 +8,9 @@ import {
     SAVE_FACT_RESPONSE_MAX_BYTES
 } from '../../../src/main/saveFacts/saveFactSchemas';
 // P5b deferred (verify/session/delta/agency): 1.x also imported
-// validateSaveFactCapabilitiesResult / validateSaveVerificationRequestV2 /
-// validateSaveVerificationResponseV2 here; the unported
-// saveFactVerificationSchemas validators and their tests are trimmed.
+// validateSaveVerificationRequestV2 / validateSaveVerificationResponseV2 here;
+// those unported saveFactVerificationSchemas validators and their tests stay
+// trimmed. The capabilities validator is the minimal F16 port.
 import { buildSaveFactSettings, SAVE_FACT_DEFAULTS } from '../../../src/main/saveFacts/saveFactSettings';
 import { createEmptyConversationFactContext } from '../../../src/main/saveFacts/saveFactTypes';
 import { SAVE_SNAPSHOT_FIXED_FILE_NAME } from '../../../src/shared/gameData/saveSnapshotProtocol';
@@ -142,6 +143,17 @@ describe('validateSaveFactExtractionResult', () => {
         }));
         expect(result.ok).toBe(true);
         if (result.ok) expect(result.value.error?.code).toBe('SAVE_BINARY_UNSUPPORTED');
+    });
+
+    it('accepts the binary melt version-gate error code', () => {
+        const result = validateSaveFactExtractionResult(validResponse({
+            status: 'unsupported',
+            facts: [],
+            entities: [],
+            error: { code: 'SAVE_TOKEN_VERSION_MISMATCH' }
+        }));
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.value.error?.code).toBe('SAVE_TOKEN_VERSION_MISMATCH');
     });
 
     it('rejects an unknown error code', () => {
@@ -362,8 +374,90 @@ describe('validateSaveFactExtractionResult', () => {
 
 // P5b deferred (verify/session/delta/agency): the 1.x suite also ran the
 // 'P1-A typed verification schemas' describe block (verify request/response
-// and capabilities whitelist validators); trimmed with the verify/capabilities
-// op paths.
+// validators); trimmed with the verify/session op paths. The capabilities
+// whitelist validator below is the minimal F16 port (binary_save_support
+// contract); its two binarySaveSupport tests are ported from 1.x 0bdb63c.
+
+describe('validateSaveFactCapabilitiesResult', () => {
+    it('accepts capabilities with binarySaveSupport', () => {
+        const result = validateSaveFactCapabilitiesResult({
+            protocolVersion: 1,
+            operation: 'capabilities',
+            status: 'ok',
+            capabilities: [{ operation: 'probe', protocolVersion: 2 }],
+            parserVersion: '0.2.0',
+            binarySaveSupport: { status: 'ok', tokenTableVersion: '1.19.0.6' }
+        });
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+            expect(result.value.binarySaveSupport).toEqual({
+                status: 'ok',
+                tokenTableVersion: '1.19.0.6'
+            });
+        }
+    });
+
+    it('rejects capabilities with malformed binarySaveSupport', () => {
+        const result = validateSaveFactCapabilitiesResult({
+            protocolVersion: 1,
+            operation: 'capabilities',
+            status: 'ok',
+            capabilities: [{ operation: 'probe', protocolVersion: 2 }],
+            binarySaveSupport: { status: 'maybe', tokenTableVersion: '1.19.0.6' }
+        });
+        expect(result.ok).toBe(false);
+    });
+
+    it('accepts a capabilities response without binarySaveSupport (optional field)', () => {
+        const result = validateSaveFactCapabilitiesResult({
+            protocolVersion: 1,
+            operation: 'capabilities',
+            status: 'ok',
+            capabilities: [{ operation: 'extract', protocolVersion: 2 }]
+        });
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.value.binarySaveSupport).toBeUndefined();
+    });
+
+    it('rejects an unsupported-protocol binarySaveSupport block', () => {
+        const result = validateSaveFactCapabilitiesResult({
+            protocolVersion: 1,
+            operation: 'capabilities',
+            status: 'ok',
+            capabilities: [],
+            binarySaveSupport: { status: 'ok', tokenTableVersion: '1.19.0.6', extra: true }
+        });
+        expect(result).toMatchObject({ ok: false, code: 'UNKNOWN_FIELD' });
+    });
+
+    it('enforces the frozen operation/version pairing (session is v3 only)', () => {
+        const legacySession = validateSaveFactCapabilitiesResult({
+            protocolVersion: 1,
+            operation: 'capabilities',
+            status: 'ok',
+            capabilities: [{ operation: 'session', protocolVersion: 2 }]
+        });
+        expect(legacySession).toMatchObject({ ok: false, code: 'INVALID_VALUE' });
+
+        const v3Session = validateSaveFactCapabilitiesResult({
+            protocolVersion: 1,
+            operation: 'capabilities',
+            status: 'ok',
+            capabilities: [{ operation: 'session', protocolVersion: 3 }]
+        });
+        expect(v3Session.ok).toBe(true);
+    });
+
+    it('rejects a future capabilities protocol version', () => {
+        const result = validateSaveFactCapabilitiesResult({
+            protocolVersion: 2,
+            operation: 'capabilities',
+            status: 'ok',
+            capabilities: []
+        });
+        expect(result).toMatchObject({ ok: false, code: 'UNSUPPORTED_PROTOCOL_VERSION' });
+    });
+});
 
 describe('buildSaveFactSettings', () => {
     it('returns safe defaults for an old config without any new fields', () => {

@@ -214,7 +214,7 @@ fn scan_alive_data<R: Read>(
                 scanner.expect_eq()?;
                 match key.as_slice() {
                     b"gold" if requested.gold => {
-                        assign_once(&mut record.gold, read_nonnegative_decimal(scanner)?)?
+                        assign_once(&mut record.gold, read_gold(scanner)?)?
                     }
                     b"commander" | b"is_commander" if requested.commander => {
                         assign_once(&mut record.commander, read_bool(scanner)?)?
@@ -310,9 +310,31 @@ fn read_ascii_enum<R: Read>(scanner: &mut Scanner<R>) -> Result<String, Identity
     }
 }
 
-fn read_nonnegative_decimal<R: Read>(scanner: &mut Scanner<R>) -> Result<String, IdentityError> {
+/// 真实 1.19 存档把 `alive_data.gold` 序列化为块（`gold={ value=<decimal> }`，
+/// 与 piety/prestige 的 currency 块同型），且 value 可为负（负债）；旧合成
+/// fixture 用标量形式。两种形式都接受，负号原样保留，由 decimal_at_least
+/// 按“阈值恒非负”把负数判为 false。块内缺 value 视为结构损坏（fail-closed）。
+fn read_gold<R: Read>(scanner: &mut Scanner<R>) -> Result<String, IdentityError> {
     match scanner.next_token()? {
-        Token::Scalar(value) | Token::Str(value) if is_nonnegative_decimal(&value) => {
+        Token::LBrace => {
+            let mut gold = None;
+            loop {
+                match scanner.next_token()? {
+                    Token::RBrace => return gold.ok_or(IdentityError::ParseFailed),
+                    Token::Eof => return Err(IdentityError::Truncated),
+                    Token::Scalar(key) => {
+                        scanner.expect_eq()?;
+                        if key == b"value" {
+                            assign_once(&mut gold, read_decimal(scanner)?)?;
+                        } else {
+                            scanner.skip_value()?;
+                        }
+                    }
+                    _ => return Err(IdentityError::ParseFailed),
+                }
+            }
+        }
+        Token::Scalar(value) | Token::Str(value) if is_decimal(&value) => {
             String::from_utf8(value).map_err(|_| IdentityError::ParseFailed)
         }
         Token::Eof => Err(IdentityError::Truncated),
@@ -320,8 +342,19 @@ fn read_nonnegative_decimal<R: Read>(scanner: &mut Scanner<R>) -> Result<String,
     }
 }
 
-fn is_nonnegative_decimal(value: &[u8]) -> bool {
-    let mut split = value.split(|byte| *byte == b'.');
+fn read_decimal<R: Read>(scanner: &mut Scanner<R>) -> Result<String, IdentityError> {
+    match scanner.next_token()? {
+        Token::Scalar(value) | Token::Str(value) if is_decimal(&value) => {
+            String::from_utf8(value).map_err(|_| IdentityError::ParseFailed)
+        }
+        Token::Eof => Err(IdentityError::Truncated),
+        _ => Err(IdentityError::ParseFailed),
+    }
+}
+
+fn is_decimal(value: &[u8]) -> bool {
+    let unsigned = value.strip_prefix(b"-").unwrap_or(value);
+    let mut split = unsigned.split(|byte| *byte == b'.');
     let integer = split.next().unwrap_or_default();
     let fraction = split.next();
     !integer.is_empty()
@@ -505,6 +538,10 @@ fn court_position_name(position: VerificationCourtPositionV2) -> &'static str {
 
 fn decimal_at_least(actual: &str, threshold: i64) -> bool {
     debug_assert!(threshold >= 0);
+    // 阈值恒非负，负数 gold（负债）恒不满足。
+    if actual.starts_with('-') {
+        return false;
+    }
     let integer = actual
         .split('.')
         .next()

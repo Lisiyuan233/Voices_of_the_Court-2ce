@@ -11,10 +11,12 @@ mod extract;
 mod fingerprint;
 mod identity;
 mod limits;
+mod melt;
 mod output;
 mod protocol;
 mod session;
 mod snapshot;
+mod tokens;
 mod verify;
 
 use std::fs;
@@ -325,30 +327,30 @@ fn probe_save(
     let fingerprint =
         fingerprint::source_fingerprint(path, &opened.header_line).unwrap_or_default();
 
-    // binary（zip_binary / unified_binary）：已识别，但无 token resolver，
-    // binary bytes 不进入文本 scanner。
-    if opened.is_binary() {
-        return protocol::response(
+    // 小型错误响应构造（本函数内所有失败分支共用，避免重复铺 ResponseParts）。
+    let source_format = opened.format;
+    let fail = |status: Status, code: ErrorCode| {
+        protocol::response(
             operation,
             started,
             ResponseParts {
-                status: Status::Unsupported,
-                source_format: opened.format,
+                status,
+                source_format,
                 snapshot_id: String::new(),
-                source_fingerprint: fingerprint,
+                source_fingerprint: fingerprint.clone(),
                 ck3_version: None,
                 identity: None,
                 join_candidates: None,
                 entities: Vec::new(),
                 facts: Vec::new(),
                 warnings: Vec::new(),
-                error: Some(ErrorCode::SaveTokenResolverMissing),
+                error: Some(code),
                 input_bytes,
                 decompressed_bytes: None,
                 scanned_bytes: None,
             },
-        );
-    }
+        )
+    };
 
     // text gamestate：有界扫描 identity，提前停止。
     let scan_limits = identity::ScanLimits {
@@ -357,58 +359,65 @@ fn probe_save(
         max_scalar: validated.limits.max_scalar_bytes as usize,
     };
     let is_zip = opened.gamestate_uncompressed_hint.is_some();
-    let reader = match opened.gamestate() {
-        Ok(reader) => reader,
-        Err(_) => {
-            return protocol::response(
-                operation,
-                started,
-                ResponseParts {
-                    status: Status::Invalid,
-                    source_format: opened.format,
-                    snapshot_id: String::new(),
-                    source_fingerprint: fingerprint,
-                    ck3_version: None,
-                    identity: None,
-                    join_candidates: None,
-                    entities: Vec::new(),
-                    facts: Vec::new(),
-                    warnings: Vec::new(),
-                    error: Some(ErrorCode::SaveTruncated),
-                    input_bytes,
-                    decompressed_bytes: None,
-                    scanned_bytes: None,
-                },
-            );
+
+    // binary（zip_binary / unified_binary）：版本门禁（meta_data.version 与
+    // token 表版本比对）→ melt 成明文，复用既有文本扫描路径；未解析 token
+    // 计数经 melt_stats 回传为 warning。text 路径行为不变。
+    let mut melt_stats: Option<melt::SharedMeltStats> = None;
+    let reader: Box<dyn io::Read + '_>;
+    let player_reader: Box<dyn io::Read + '_>;
+    if opened.is_binary() {
+        let gate_reader = match opened.gamestate_binary() {
+            Ok(reader) => reader,
+            Err(envelope::EnvelopeError::UnsupportedCompression) => {
+                return fail(Status::Unsupported, ErrorCode::SaveVersionUnsupported)
+            }
+            Err(_) => return fail(Status::Invalid, ErrorCode::SaveTruncated),
+        };
+        match melt::check_version(gate_reader, melt::VERSION_GATE_MAX_BYTES) {
+            Ok(()) => {}
+            Err(melt::VersionGateError::Truncated) => {
+                return fail(Status::Invalid, ErrorCode::SaveTruncated)
+            }
+            Err(melt::VersionGateError::ParseFailed) => {
+                return fail(Status::Invalid, ErrorCode::SaveParseFailed)
+            }
+            Err(melt::VersionGateError::Mismatch) => {
+                return fail(Status::Unsupported, ErrorCode::SaveTokenVersionMismatch)
+            }
         }
-    };
-    let player_reader = match opened.gamestate() {
-        Ok(reader) => reader,
-        Err(_) => {
-            return protocol::response(
-                operation,
-                started,
-                ResponseParts {
-                    status: Status::Invalid,
-                    source_format: opened.format,
-                    snapshot_id: String::new(),
-                    source_fingerprint: fingerprint,
-                    ck3_version: None,
-                    identity: None,
-                    join_candidates: None,
-                    entities: Vec::new(),
-                    facts: Vec::new(),
-                    warnings: Vec::new(),
-                    error: Some(ErrorCode::SaveTruncated),
-                    input_bytes,
-                    decompressed_bytes: None,
-                    scanned_bytes: None,
-                },
-            );
-        }
-    };
+        let stats = melt::new_stats();
+        reader = match opened.gamestate_binary() {
+            Ok(r) => Box::new(melt::MeltReader::new(r, stats.clone())),
+            Err(_) => return fail(Status::Invalid, ErrorCode::SaveTruncated),
+        };
+        player_reader = match opened.gamestate_binary() {
+            Ok(r) => Box::new(melt::MeltReader::new(r, stats.clone())),
+            Err(_) => return fail(Status::Invalid, ErrorCode::SaveTruncated),
+        };
+        melt_stats = Some(stats);
+    } else {
+        reader = match opened.gamestate() {
+            Ok(reader) => reader,
+            Err(_) => return fail(Status::Invalid, ErrorCode::SaveTruncated),
+        };
+        player_reader = match opened.gamestate() {
+            Ok(reader) => reader,
+            Err(_) => return fail(Status::Invalid, ErrorCode::SaveTruncated),
+        };
+    }
     let extraction = match identity::extract(reader, player_reader, scan_limits) {
-        Ok(extraction) => extraction,
+        Ok(mut extraction) => {
+            if let Some(stats) = &melt_stats {
+                if stats.unresolved_tokens.get() > 0 {
+                    extraction.warnings.push(protocol::Warning {
+                        code: melt::WARN_TOKENS_PARTIALLY_UNRESOLVED.to_string(),
+                        category: None,
+                    });
+                }
+            }
+            extraction
+        }
         Err(err) => {
             let code = match err {
                 identity::IdentityError::Truncated => ErrorCode::SaveTruncated,
@@ -417,26 +426,7 @@ fn probe_save(
                     ErrorCode::SaveParseFailed
                 }
             };
-            return protocol::response(
-                operation,
-                started,
-                ResponseParts {
-                    status: Status::Invalid,
-                    source_format: opened.format,
-                    snapshot_id: String::new(),
-                    source_fingerprint: fingerprint,
-                    ck3_version: None,
-                    identity: None,
-                    join_candidates: None,
-                    entities: Vec::new(),
-                    facts: Vec::new(),
-                    warnings: Vec::new(),
-                    error: Some(code),
-                    input_bytes,
-                    decompressed_bytes: None,
-                    scanned_bytes: None,
-                },
-            );
+            return fail(Status::Invalid, code);
         }
     };
 
@@ -476,35 +466,32 @@ fn probe_save(
         protocol::Operation::Extract => {
             // extract 会读完整条 gamestate 流，使用带 CRC/size 校验的
             // reader（读到 EOF 时验证；probe 提前停止不校验尾部）。
-            let reader = match opened.gamestate_verified() {
-                Ok(reader) => reader,
-                Err(err) => {
-                    let (status, code) = match err {
-                        envelope::EnvelopeError::UnsupportedCompression => {
-                            (Status::Unsupported, ErrorCode::SaveVersionUnsupported)
-                        }
-                        _ => (Status::Invalid, ErrorCode::SaveTruncated),
-                    };
-                    return protocol::response(
-                        operation,
-                        started,
-                        ResponseParts {
-                            status,
-                            source_format: opened.format,
-                            snapshot_id: String::new(),
-                            source_fingerprint: fingerprint,
-                            ck3_version: None,
-                            identity: None,
-                            join_candidates: None,
-                            entities: Vec::new(),
-                            facts: Vec::new(),
-                            warnings: Vec::new(),
-                            error: Some(code),
-                            input_bytes,
-                            decompressed_bytes: None,
-                            scanned_bytes: None,
-                        },
-                    );
+            // binary 走 verified binary reader + melt 包装（同一 stats）。
+            let reader: Box<dyn io::Read + '_> = if let Some(stats) = &melt_stats {
+                match opened.gamestate_binary_verified() {
+                    Ok(r) => Box::new(melt::MeltReader::new(r, stats.clone())),
+                    Err(err) => {
+                        let (status, code) = match err {
+                            envelope::EnvelopeError::UnsupportedCompression => {
+                                (Status::Unsupported, ErrorCode::SaveVersionUnsupported)
+                            }
+                            _ => (Status::Invalid, ErrorCode::SaveTruncated),
+                        };
+                        return fail(status, code);
+                    }
+                }
+            } else {
+                match opened.gamestate_verified() {
+                    Ok(reader) => reader,
+                    Err(err) => {
+                        let (status, code) = match err {
+                            envelope::EnvelopeError::UnsupportedCompression => {
+                                (Status::Unsupported, ErrorCode::SaveVersionUnsupported)
+                            }
+                            _ => (Status::Invalid, ErrorCode::SaveTruncated),
+                        };
+                        return fail(status, code);
+                    }
                 }
             };
             let extract_limits = extract::ExtractionLimits {
@@ -551,26 +538,7 @@ fn probe_save(
                             ErrorCode::SaveParseFailed
                         }
                     };
-                    return protocol::response(
-                        operation,
-                        started,
-                        ResponseParts {
-                            status: Status::Invalid,
-                            source_format: opened.format,
-                            snapshot_id: String::new(),
-                            source_fingerprint: fingerprint,
-                            ck3_version: None,
-                            identity: None,
-                            join_candidates: None,
-                            entities: Vec::new(),
-                            facts: Vec::new(),
-                            warnings: Vec::new(),
-                            error: Some(code),
-                            input_bytes,
-                            decompressed_bytes: None,
-                            scanned_bytes: None,
-                        },
-                    );
+                    return fail(Status::Invalid, code);
                 }
             }
         }

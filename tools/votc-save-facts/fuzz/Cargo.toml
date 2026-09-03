@@ -1,0 +1,38 @@
+[package]
+name = "votc-save-facts-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# 独立 workspace，不进主 crate。
+[workspace]
+
+# 依赖与主 crate 保持一致（fuzz target 通过 #[path] 直接编译主 crate 源码）。
+[dependencies]
+libfuzzer-sys = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jomini = { version = "0.35", default-features = false, features = ["envelope", "derive"] }
+rawzip = "0.5"
+sha2 = "0.11"
+
+[[bin]]
+name = "envelope_detect"
+path = "fuzz_targets/envelope_detect.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "text_scanner"
+path = "fuzz_targets/text_scanner.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "melt"
+path = "fuzz_targets/melt.rs"
+test = false
+doc = false

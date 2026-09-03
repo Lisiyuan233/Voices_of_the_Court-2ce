@@ -91,24 +91,42 @@ pub(crate) fn run(
             checked_count,
         );
     }
-    if opened.is_binary() {
-        return protocol::verification_response(
-            started,
-            Status::Unsupported,
-            source_fingerprint,
-            source_format,
-            empty_identity,
-            Vec::new(),
-            Vec::new(),
-            Some(ErrorCode::SaveTokenResolverMissing),
-            checked_count,
-        );
-    }
 
-    let gamestate_reader = match opened.gamestate_verified() {
-        Ok(reader) => reader,
-        Err(error) => {
-            let (status, code) = map_envelope_error(error);
+    // binary：版本门禁 → melt 成明文后走既有文本验证路径；未解析 token
+    // 计数回传为 warning。text 路径行为不变。
+    let mut melt_stats: Option<crate::melt::SharedMeltStats> = None;
+    if opened.is_binary() {
+        let gate_reader = match opened.gamestate_binary() {
+            Ok(reader) => reader,
+            Err(error) => {
+                let (status, code) = map_envelope_error(error);
+                return protocol::verification_response(
+                    started,
+                    status,
+                    source_fingerprint,
+                    source_format,
+                    empty_identity,
+                    Vec::new(),
+                    Vec::new(),
+                    Some(code),
+                    checked_count,
+                );
+            }
+        };
+        let gate_result = crate::melt::check_version(gate_reader, crate::melt::VERSION_GATE_MAX_BYTES);
+        let gate_failure = match gate_result {
+            Ok(()) => None,
+            Err(crate::melt::VersionGateError::Mismatch) => {
+                Some((Status::Unsupported, ErrorCode::SaveTokenVersionMismatch))
+            }
+            Err(crate::melt::VersionGateError::Truncated) => {
+                Some((Status::Invalid, ErrorCode::SaveTruncated))
+            }
+            Err(crate::melt::VersionGateError::ParseFailed) => {
+                Some((Status::Invalid, ErrorCode::SaveParseFailed))
+            }
+        };
+        if let Some((status, code)) = gate_failure {
             return protocol::verification_response(
                 started,
                 status,
@@ -120,6 +138,45 @@ pub(crate) fn run(
                 Some(code),
                 checked_count,
             );
+        }
+        melt_stats = Some(crate::melt::new_stats());
+    }
+
+    let gamestate_reader: Box<dyn std::io::Read + '_> = if let Some(stats) = &melt_stats {
+        match opened.gamestate_binary_verified() {
+            Ok(reader) => Box::new(crate::melt::MeltReader::new(reader, stats.clone())),
+            Err(error) => {
+                let (status, code) = map_envelope_error(error);
+                return protocol::verification_response(
+                    started,
+                    status,
+                    source_fingerprint,
+                    source_format,
+                    empty_identity,
+                    Vec::new(),
+                    Vec::new(),
+                    Some(code),
+                    checked_count,
+                );
+            }
+        }
+    } else {
+        match opened.gamestate_verified() {
+            Ok(reader) => reader,
+            Err(error) => {
+                let (status, code) = map_envelope_error(error);
+                return protocol::verification_response(
+                    started,
+                    status,
+                    source_fingerprint,
+                    source_format,
+                    empty_identity,
+                    Vec::new(),
+                    Vec::new(),
+                    Some(code),
+                    checked_count,
+                );
+            }
         }
     };
     let gamestate = match bound
@@ -180,7 +237,17 @@ pub(crate) fn run(
         }
     };
     let identity = match identity::extract(identity_root, identity_player, scan_limits) {
-        Ok(identity) => identity,
+        Ok(mut identity) => {
+            if let Some(stats) = &melt_stats {
+                if stats.unresolved_tokens.get() > 0 {
+                    identity.warnings.push(protocol::Warning {
+                        code: crate::melt::WARN_TOKENS_PARTIALLY_UNRESOLVED.to_string(),
+                        category: None,
+                    });
+                }
+            }
+            identity
+        }
         Err(error) => {
             return protocol::verification_response(
                 started,

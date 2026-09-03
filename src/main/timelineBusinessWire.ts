@@ -262,6 +262,20 @@ async function runSourceTransition(args: {
             if (!guardResult.ok) {
                 throw new Error(`timelineBusinessWire: guard rejected transition: ${guardResult.reason ?? 'unknown'}`);
             }
+            // A conversation commit whose CK3 parent already has journal
+            // children means CK3 was rolled back to an earlier save while the
+            // graph head moved on. The sibling branch is representable — the
+            // visibility graph treats it as a separate lineage — but surface
+            // it loudly: a silent fork here was mistaken for cross-save
+            // record leaks during acceptance (BUG-004).
+            if (args.commitMode === 'atomic-advance' && graphParentNodeId) {
+                const hasOtherChildren = store
+                    .getAllNodes()
+                    .some(n => n.parentId === graphParentNodeId && n.requestKey !== args.requestKey);
+                if (hasOtherChildren) {
+                    console.warn(`[timeline] atomic-advance is branching from non-leaf CK3 node ${graphParentNodeId}: a save rollback likely occurred; target ${targetNodeId} starts a sibling branch`);
+                }
+            }
             const api = new TransitionJournalApi({
                 store,
                 persistence,

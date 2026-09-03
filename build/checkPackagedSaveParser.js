@@ -1,9 +1,11 @@
 /**
  * Verify that an Electron Forge package contains the exact staged save parser
- * sidecar. Adapted from 1.x build/checkPackagedSaveParser.js (P5): 2CE does
- * not ship THIRD_PARTY_NOTICES.md, so only the binary hash + a probe smoke
- * run against the packaged executable are checked. Post-package on purpose —
- * a successful Rust build alone does not prove the file reached resources/.
+ * sidecar and its third-party notices. Adapted from 1.x
+ * build/checkPackagedSaveParser.js (P5/F18): the binary hash is compared, the
+ * packaged THIRD_PARTY_NOTICES.md must match the source file, and a
+ * capabilities smoke run exercises the packaged executable. Post-package on
+ * purpose — a successful Rust build alone does not prove the files reached
+ * resources/.
  */
 
 const crypto = require('crypto');
@@ -18,6 +20,8 @@ const packageRoot = path.join(outDir, `${productName}-win32-x64`);
 const resourcesRoot = path.join(packageRoot, 'resources');
 const stagedParser = path.join(root, 'build', 'save-parser', 'win32-x64', 'votc-save-facts.exe');
 const packagedParser = path.join(resourcesRoot, 'save-parser', 'win32-x64', 'votc-save-facts.exe');
+const sourceNotices = path.join(root, 'THIRD_PARTY_NOTICES.md');
+const packagedNotices = path.join(resourcesRoot, 'THIRD_PARTY_NOTICES.md');
 const fixtureRoot = path.join(root, 'tools', 'votc-save-facts', 'tests', 'fixtures');
 const fixture = path.join(fixtureRoot, 'unified_text_minimal.ck3');
 
@@ -38,10 +42,16 @@ function sha256(filePath) {
 
 requireFile(stagedParser, 'staged parser');
 requireFile(packagedParser, 'packaged parser');
+requireFile(sourceNotices, 'source third-party notices');
+requireFile(packagedNotices, 'packaged third-party notices');
 requireFile(fixture, 'smoke-test fixture');
 
 if (sha256(stagedParser) !== sha256(packagedParser)) {
     fail('packaged parser hash does not match the staged release binary');
+}
+
+if (sha256(sourceNotices) !== sha256(packagedNotices)) {
+    fail('packaged third-party notices do not match the source file');
 }
 
 // Probe smoke against the PACKAGED executable (not the staged one) so a
@@ -65,4 +75,5 @@ if (!parsed || parsed.operation !== 'capabilities') {
 }
 
 console.log('[checkPackagedSaveParser] packaged save parser verified.');
+console.log(`[checkPackagedSaveParser] parser ${fs.statSync(packagedParser).size} bytes, notices present.`);
 console.log(`[checkPackagedSaveParser] package root: ${packageRoot}`);

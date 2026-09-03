@@ -155,7 +155,7 @@ fn global_fact_cap_marks_partial_without_leaking_unbounded_war_data() {
 }
 
 #[test]
-fn malformed_text_is_invalid_and_binary_remains_unsupported() {
+fn malformed_text_is_invalid_and_garbage_binary_is_rejected() {
     let dir = TempDir::new("war-envelope-safety");
     let malformed = war_body("\t9000={\n\t\tname=\"Broken\"\n\t\tattacker={ character=1001 }\n");
     let invalid = extract_on_body(
@@ -167,12 +167,13 @@ fn malformed_text_is_invalid_and_binary_remains_unsupported() {
     assert_eq!(invalid["status"], "invalid");
     assert!(invalid["facts"].as_array().unwrap().is_empty());
 
+    // 垃圾二进制 fixture：melt 门禁判损坏（SAVE_PARSE_FAILED），不产生 facts。
     let fixtures = fixtures_dir();
     let binary = extract_json(
         &fixtures.join("binary_marker_minimal.ck3"),
         &fixtures,
         &extract_request(&["1001"], &["war"]),
     );
-    assert_eq!(binary["status"], "unsupported");
+    assert_eq!(binary["status"], "invalid");
     assert!(binary["facts"].as_array().unwrap().is_empty());
 }

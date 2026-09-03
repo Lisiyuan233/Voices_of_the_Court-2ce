@@ -12,7 +12,9 @@
     "make": "npm run save-parser:build && npm run save-parser:stage && npm run createTypeDefs && npm run build && electron-forge make && npm run package:verify",
     "publish": "npm run save-parser:build && npm run save-parser:stage && npm run build && electron-forge publish",
     "test": "jest",
+    "save-parser:check": "cargo test --manifest-path tools/votc-save-facts/Cargo.toml",
     "save-parser:build": "cargo build --release --locked --manifest-path tools/votc-save-facts/Cargo.toml",
+    "save-parser:measure": "pwsh -NoProfile -File ./build/measureSaveParserPerformance.ps1",
     "save-parser:stage": "node ./build/stageSaveParser.js",
     "package:verify": "node ./build/checkPackagedSaveParser.js"
   },

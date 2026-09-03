@@ -30,7 +30,7 @@ fixture 实体文件由后续 Task 0（实机确认）和 Task 3（identity/fact
 | `unified_text_minimal.ck3` | unified text | 最小纯文本存档，验证 identity 与基础 facts 提取 | 已填充（Task 3，手工合成） |
 | `unified_text_player_variables.ck3` | unified text | 脱敏后的 CK3 1.19 实机字段顺序、玩家变量路径与零值省略编码 | 已填充（Task 0/3，按实机结果裁剪重建） |
 | `prefixed_zip_text_minimal.ck3` | prefixed ZIP + text | 带 ZIP 前缀的文本存档，验证前缀剥离与 identity 提取 | 已填充（Task 3，由 `tests/common/mod.rs` 在临时目录动态生成同名文件；deflate entry） |
-| `binary_marker_minimal.ck3` | binary | 二进制游戏状态标记，验证 sidecar 明确降级而不误解析 | 已填充（Task 3，手工合成） |
+| `binary_marker_minimal.ck3` | binary（垃圾内容） | 二进制游戏状态标记，验证 sidecar 不误解析垃圾二进制（melt 接入后：版本门禁/melt 层判损坏 → `invalid` + `SAVE_PARSE_FAILED`） | 已填充（Task 3，手工合成；2026-08-29 语义更新） |
 | `truncated_minimal.ck3` | unified text（截断） | 写入中断的截断存档，验证有界输出与错误路径 | 已填充（Task 3，手工合成） |
 | `unified_text_join_candidates_minimal.ck3` | unified text | 含 root `variables.list` 块中 `votc_join_candidates` 全局列表的最小存档，验证 `joinCandidates` 保序提取 | 已填充（Plan C Task 2b，手工合成） |
 
@@ -45,8 +45,11 @@ fixture 实体文件由后续 Task 0（实机确认）和 Task 3（identity/fact
 - `prefixed_zip_text_minimal.ck3`（动态生成）：`SAV0102` header + inline meta 前缀 +
   ZIP（deflate，`gamestate` entry）。jomini envelope 只支持 deflate entry，stored 会按
   `unsupported` + `SAVE_VERSION_UNSUPPORTED` 降级。
-- `binary_marker_minimal.ck3`：`SAV0101` header + 非 ZIP 二进制内容 → `unified_binary`，
-  `unsupported` + `SAVE_TOKEN_RESOLVER_MISSING`。
+- `binary_marker_minimal.ck3`：`SAV0101` header + 非 ZIP 垃圾二进制内容 → `unified_binary`。
+  2026-08-29 二进制 melt 接入前：`unsupported` + `SAVE_TOKEN_RESOLVER_MISSING`；
+  接入后：melt/版本门禁判内容损坏 → `invalid` + `SAVE_PARSE_FAILED`（不可解析的二进制
+  绝不误解析的语义不变，只是拒绝点从 envelope 层移到 melt 层）。可解析二进制（unified/zip）
+  的端到端覆盖在 `tests/melt_binary.rs`（合成二进制 gamestate + 版本门禁篡改）。
 - `truncated_minimal.ck3`：`SAV0100` header + `meta_data` 块中途截断（花括号未闭合）→
   `invalid` + `SAVE_TRUNCATED`。
 
@@ -72,8 +75,29 @@ fixture 实体文件由后续 Task 0（实机确认）和 Task 3（identity/fact
   365 天年、2 月恒 28 天，需与 mod 端 `GetDateAsTotalDays` 实机对齐。
 - **已识别 CK3 版本前缀**：`1.13`-`1.19`，未知版本 probe 仍 ok 但给
   `CK3_VERSION_UNRECOGNIZED` warning。
-- **标准非 debug 格式**：CK3 1.19.0.6 GUI save 实测为 `SAV0103` / `zip_binary`；
-  当前 sidecar 正确降级为 `SAVE_TOKEN_RESOLVER_MISSING`，不能作为生产事实源使用。
+- **标准非 debug 格式**：CK3 1.19.0.6 GUI save 实测为 `SAV0103` / `zip_binary`。
+
+## 二进制 melt 接入记录（2026-08-29，binary-save-melt-integration-plan）
+
+- 非 debug 二进制存档（`SAV0101`/`SAV0103`）经 `src/melt.rs` 流式 melt 成明文后
+  复用全部既有文本路径（probe/extract/verify/session），token 表为
+  `tools/token-resolver-builder` 产出的 1.19.0.6 静态表（build.rs 转换后 `include!`
+  进 `src/tokens.rs`，零新增依赖）。
+- **版本门禁**：二进制存档先 melt 开头取 `meta_data.version`，与表版本精确比对；
+  不一致 → `unsupported` + `SAVE_TOKEN_VERSION_MISMATCH`。明文存档不受门禁影响。
+- **实机 probe 结论（规划 §7.2）**：二进制 `meta_data` 块位于 gamestate 开头，
+  `version` 为引号字符串；`meta_date` 是 **I32 小时计数**（非字符串），melt 按键名
+  `date`/`meta_date` 把小时计数转回 `Y.M.D[.H]` 文本。
+- **降级策略**：未解析 token 绝不猜——字段键 → `unknown_0xXXXX=`，Id/lookup 值 →
+  `"0xXXXX"`，出现即带 `TOKENS_PARTIALLY_UNRESOLVED` warning（不降级 status）。
+  6 对真实存档实测每个存档仅 1 个未解析 token（`0x39e7`，不在 VOTC 消费路径）。
+- **一致性验收**：`run_pair_acceptance.py` 对 6 对配对存档（`votc_save_test1..6(.ck3|_1.ck3)`）
+  的 probe/extract 输出做语义 diff，identity/entities/facts/warnings 全部一致
+  （binary 仅多 `TOKENS_PARTIALLY_UNRESOLVED`）。
+- App 端跟进项（本次未改 App）：`SAVE_FACT_ERROR_CODES` 需加入
+  `SAVE_TOKEN_VERSION_MISMATCH`（`src/main/saveFacts/saveFactTypes.ts` 及
+  `saveFactVerificationSchemas.ts` 白名单），capabilities 的 `binarySaveSupport`
+  字段待 App 白名单放行后再启用（见 `src/capabilities.rs` 注释）。
 
 ## Task 4 填充记录（extract raw schema，CK3 1.19 实机确认）
 

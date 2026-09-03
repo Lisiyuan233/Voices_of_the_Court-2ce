@@ -166,4 +166,67 @@ describe('P0 known secrets', () => {
         expect(ks.canBeExposed).toBe(true);
         expect(ks.otherKnowers).toEqual([{ id: 4000, name: 'Bishop Curious' }]);
     });
+
+    it('warns and starts fresh when a k_secret block is missing its eob line', async () => {
+        // A block without k_secret_eob leaves a pending entry behind; the next
+        // k_secret for the same character must warn before overwriting it and
+        // the final data must only contain the terminated block.
+        const head = readFileSync(FIXTURE, 'utf8').split('\n').slice(0, 2).join('\n'); // init + character
+        const tmp = path.join(__dirname, 'tmp_missing_eob_fixture.txt');
+        writeFileSync(tmp, [
+            head,
+            'VOTC:IN/;/k_secret/;/2000/;/Stale Secret/;/This block never terminates./;/Murder/;/secret_murder',
+            'VOTC:IN/;/k_secret_owner/;/2000/;/3000/;/Count Bad',
+            'VOTC:IN/;/k_secret/;/2000/;/Real Secret/;/This one terminates./;/Murder/;/secret_murder',
+            'VOTC:IN/;/k_secret_target/;/2000/;/3000/;/Count Bad',
+            'VOTC:IN/;/k_secret_eob/;/2000/;/'
+        ].join('\n') + '\n');
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const gd = await parseLog(tmp);
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            const warning = String(warnSpy.mock.calls[0][0]);
+            expect(warning).toContain('k_secret');
+            expect(warning).toContain('2000');
+            expect(warning).toContain('Stale Secret');
+            const knownSecrets = gd!.characters.get(2000)!.knownSecrets;
+            expect(knownSecrets).toHaveLength(1);
+            expect(knownSecrets[0].name).toBe('Real Secret');
+            expect(knownSecrets[0].desc).toBe('This one terminates.');
+            expect(knownSecrets[0].type).toBe('secret_murder');
+            expect(knownSecrets[0].targetId).toBe(3000);
+            expect(knownSecrets[0].otherKnowers).toEqual([]);
+        } finally {
+            warnSpy.mockRestore();
+            unlinkSync(tmp);
+        }
+    });
+});
+
+describe('P0 owned secrets', () => {
+    it('assembles a full owned-secret block until eob and fills ownedSecrets', async () => {
+        const ai = await aiChar(FIXTURE);
+        expect(ai.secrets).toHaveLength(1);
+        const s = ai.secrets[0];
+        expect(s.name).toBe('Hidden Lover');
+        expect(s.desc).toBe('Duke AI keeps a secret lover at court.');
+        expect(s.category).toBe('Sexual');
+        expect(s.type).toBe('secret_lover');
+        expect(s.isCriminal).toBeUndefined();
+        expect(s.isShunned).toBe(true);
+        expect(s.targetId).toBe(3001);
+        expect(s.targetName).toBe('Lady Secret');
+        expect(s.spent).toBe(true);
+        expect(s.canBeExposed).toBe(false);
+        expect(s.otherKnowers).toEqual([{ id: 4000, name: 'Bishop Curious' }]);
+
+        // 1.x v1 snapshot-schema parity: owned secrets also land in
+        // ownedSecrets as name/type/category/description.
+        expect(ai.ownedSecrets).toEqual([{
+            name: 'Hidden Lover',
+            type: 'secret_lover',
+            category: 'Sexual',
+            description: 'Duke AI keeps a secret lover at court.'
+        }]);
+    });
 });

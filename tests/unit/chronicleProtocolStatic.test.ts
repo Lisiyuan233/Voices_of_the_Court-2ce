@@ -97,8 +97,13 @@ describe('chronicle protocol parity (app parsers ↔ mod2 ce emitters)', () => {
         expect(onActions).toMatch(/yearly_playable_pulse[\s\S]*votc_chronicle_event\.9002/);
         expect(effects).toContain('votc_open_chronicle_manager_manual_effect = {');
         expect(effects).toContain('trigger_event = votc_chronicle_event.9004');
-        // The decision entry (hud.gui replacement) fires the manual effect.
-        expect(readModFile('common/decisions/votc_decisions.txt')).toContain('votc_open_chronicle_manager_manual_effect = yes');
+        // The decision entry (hud.gui replacement) fires the manual tick
+        // wrapper, which stamps votc_chronicle_signal_kind = manual before the
+        // manager effect; calling the inner effect directly would leave the
+        // clipboard payload's signal kind empty and the app rejects it.
+        expect(effects).toContain('votc_chronicle_manual_tick_effect = {');
+        expect(readModFile('common/decisions/votc_decisions.txt')).toContain('votc_chronicle_manual_tick_effect = yes');
+        expect(readModFile('common/decisions/votc_decisions.txt')).not.toContain('votc_open_chronicle_manager_manual_effect = yes');
     });
 
     it('keeps all chronicle mod files structurally balanced', () => {

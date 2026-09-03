@@ -277,6 +277,9 @@ export async function buildChatPrompt(conv: Conversation, character: Character, 
         }
 
         // Pass character to the script
+        // Per-build scene budget: extended facts aggregate under one
+        // scene-wide cap for this prompt build only (see GameData).
+        conv.gameData.resetExtendedFactsSceneBudget();
         description = require(descriptionPath)(conv.gameData, character);
 
         // Clean up the temporary function

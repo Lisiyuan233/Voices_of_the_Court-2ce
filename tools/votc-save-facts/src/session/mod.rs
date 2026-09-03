@@ -840,29 +840,83 @@ fn handle_open(
             writer,
         );
     }
+    // binary：版本门禁 → melt 成明文，物化为私有临时 artifact 后走既有
+    // 文本索引路径；melt 输出经 materialize_gamestate 流式写盘并受
+    // max_decompressed_bytes 上限约束（不整体进内存）。text 路径行为不变。
+    let mut melt_stats: Option<crate::melt::SharedMeltStats> = None;
     if opened.is_binary() {
-        return fatal(
-            state,
-            Some(&request.request_id),
-            Some(SessionOperation::SessionOpen),
-            ErrorCode::SaveTokenResolverMissing,
-            "binary saves are unsupported for sessions",
-            writer,
-        );
-    }
-
-    let gamestate_reader = match opened.gamestate_verified() {
-        Ok(reader) => reader,
-        Err(error) => {
-            let (_, code) = map_envelope_error(error);
+        let gate_reader = match opened.gamestate_binary() {
+            Ok(reader) => reader,
+            Err(error) => {
+                let (_, code) = map_envelope_error(error);
+                return fatal(
+                    state,
+                    Some(&request.request_id),
+                    Some(SessionOperation::SessionOpen),
+                    code,
+                    "binary gamestate stream rejected",
+                    writer,
+                );
+            }
+        };
+        let gate_failure = match crate::melt::check_version(
+            gate_reader,
+            crate::melt::VERSION_GATE_MAX_BYTES,
+        ) {
+            Ok(()) => None,
+            Err(crate::melt::VersionGateError::Mismatch) => Some((
+                ErrorCode::SaveTokenVersionMismatch,
+                "save version does not match token table",
+            )),
+            Err(crate::melt::VersionGateError::Truncated) => {
+                Some((ErrorCode::SaveTruncated, "binary meta section unreadable"))
+            }
+            Err(crate::melt::VersionGateError::ParseFailed) => {
+                Some((ErrorCode::SaveParseFailed, "binary meta section malformed"))
+            }
+        };
+        if let Some((code, message)) = gate_failure {
             return fatal(
                 state,
                 Some(&request.request_id),
                 Some(SessionOperation::SessionOpen),
                 code,
-                "gamestate stream rejected",
+                message,
                 writer,
             );
+        }
+        melt_stats = Some(crate::melt::new_stats());
+    }
+
+    let gamestate_reader: Box<dyn std::io::Read + '_> = if let Some(stats) = &melt_stats {
+        match opened.gamestate_binary_verified() {
+            Ok(reader) => Box::new(crate::melt::MeltReader::new(reader, stats.clone())),
+            Err(error) => {
+                let (_, code) = map_envelope_error(error);
+                return fatal(
+                    state,
+                    Some(&request.request_id),
+                    Some(SessionOperation::SessionOpen),
+                    code,
+                    "gamestate stream rejected",
+                    writer,
+                );
+            }
+        }
+    } else {
+        match opened.gamestate_verified() {
+            Ok(reader) => reader,
+            Err(error) => {
+                let (_, code) = map_envelope_error(error);
+                return fatal(
+                    state,
+                    Some(&request.request_id),
+                    Some(SessionOperation::SessionOpen),
+                    code,
+                    "gamestate stream rejected",
+                    writer,
+                );
+            }
         }
     };
     let gamestate = match bound.materialize_gamestate(
@@ -880,6 +934,24 @@ fn handle_open(
                 writer,
             );
         }
+    };
+    // session_open 响应无 warnings 通道；未解析 token 计数只写有界 stderr 诊断。
+    if let Some(stats) = &melt_stats {
+        let unresolved = stats.unresolved_tokens.get();
+        if unresolved > 0 {
+            eprintln!(
+                "votc-save-facts: session melt produced {} unresolved token(s) ({})",
+                unresolved.min(9_999_999),
+                crate::melt::WARN_TOKENS_PARTIALLY_UNRESOLVED
+            );
+        }
+    }
+    let source_format = match opened.format {
+        crate::protocol::SourceFormat::UnifiedText => "unified_text",
+        crate::protocol::SourceFormat::ZipText => "zip_text",
+        crate::protocol::SourceFormat::ZipBinary => "zip_binary",
+        crate::protocol::SourceFormat::UnifiedBinary => "unified_binary",
+        crate::protocol::SourceFormat::Unknown => "unknown",
     };
     drop(opened);
 
@@ -1019,7 +1091,7 @@ fn handle_open(
         },
         manifest: SessionManifest {
             source_fingerprint: state.source_fingerprint.clone().unwrap_or_default(),
-            source_format: "unified_text".into(),
+            source_format: source_format.into(),
             parser_version: env!("CARGO_PKG_VERSION").to_string(),
         },
         index: summary,

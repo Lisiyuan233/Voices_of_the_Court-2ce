@@ -1,5 +1,13 @@
 import fs from 'fs';
 import path from 'path';
+import {
+    buildIdentityFromParts,
+    type CampaignPlayerIdentity
+} from '../shared/gameData/CampaignIdentity.js';
+import {
+    TIMELINE_CAMPAIGN_SCHEMA,
+    TIMELINE_PROTOCOL_SCHEMA
+} from '../shared/gameData/timelineProtocol.js';
 
 export interface BookmarkPlayer {
     id: string;
@@ -116,6 +124,58 @@ export async function parseLogForBookmarks(debugLogPath: string): Promise<Bookma
     }
     
     console.log(`Parsed bookmark data: date=${bookmarkData.date}, player=${bookmarkData.player.name}, characters=${bookmarkData.characters_in_bookmark.size}`);
-    
+
     return bookmarkData;
+}
+
+/**
+ * Parse the V2 campaign identity carried by the bookmark clipboard command.
+ * (Ported from 1.x parseLogforbookmarks.ts:138-180, F10.)
+ *
+ * The game log only contains the character snapshot. The campaign identity is
+ * deliberately sent on the clipboard command, so a bookmark can never be
+ * written into the legacy, cross-campaign summary directory by mistake.
+ */
+export function parseBookmarkCampaignIdentityPayload(
+    payloads: readonly string[] | undefined,
+    expectedPlayerId: string
+): CampaignPlayerIdentity {
+    if (!payloads || payloads.length < 11 || payloads[0] !== 'campaign') {
+        throw new Error('Bookmark command is missing its V2 campaign identity payload.');
+    }
+
+    const playerId = payloads[1];
+    if (playerId !== expectedPlayerId) {
+        throw new Error(
+            `Bookmark player mismatch: log contains ${expectedPlayerId}, command contains ${playerId}.`
+        );
+    }
+
+    const checkpointEpoch = Number(payloads[2]);
+    const protocolSchema = Number(payloads[3]);
+    const campaignSchema = Number(payloads[4]);
+    const playerTimelineSchema = Number(payloads[10]);
+
+    if (!Number.isSafeInteger(checkpointEpoch) || checkpointEpoch < 0) {
+        throw new Error(`Bookmark checkpoint epoch is invalid: ${payloads[2]}.`);
+    }
+    if (protocolSchema !== TIMELINE_PROTOCOL_SCHEMA) {
+        throw new Error(`Unsupported bookmark protocol schema: ${payloads[3]}.`);
+    }
+    if (campaignSchema !== TIMELINE_CAMPAIGN_SCHEMA) {
+        throw new Error(`Unsupported bookmark campaign schema: ${payloads[4]}.`);
+    }
+    if (playerTimelineSchema !== TIMELINE_CAMPAIGN_SCHEMA) {
+        throw new Error(`Unsupported bookmark player timeline schema: ${payloads[10]}.`);
+    }
+
+    return buildIdentityFromParts(
+        {
+            a: Number(payloads[5]),
+            b: Number(payloads[6]),
+            c: Number(payloads[7]),
+            d: Number(payloads[8])
+        },
+        playerId
+    );
 }

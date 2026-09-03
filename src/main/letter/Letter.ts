@@ -20,6 +20,10 @@ export class Letter implements ILetter {
     deliveryTimestamp?: Date;
     expectedDeliveryDate?: Date;
     votcCheckpointEpoch?: number;
+    /** Timeline lineage stamps (F21), see letterInterfaces.ts. */
+    votcCampaignId?: string;
+    votcTimelineNodeId?: string;
+    votcTimelineParentId?: string;
     /** See Letter.timelineRunBlock in letterInterfaces.ts. */
     timelineRunBlock?: string;
 

@@ -1,0 +1,6 @@
+{
+  "_note": "人工订正表，build 时在跨配对投票之后应用。0x3fcc 证据：配对对齐器在 subunit_stack 区域受 flags 位域展开（文本侧 needs_help/needs_help_changed 布尔 vs 二进制侧 flags 组）影响产生错位；字节级走查（社区表定位，test4 二进制 /ai/war_coordinator_db/*/unit_stack/subunit_stack 字段序列 id,units,flags,enemy,0x3fcc,0x3fcd）与 pdx.tools 社区表（exe 提取）一致指向 needs_external_help。详见 README。",
+  "tokens": {
+    "0x3fcc": "needs_external_help"
+  }
+}

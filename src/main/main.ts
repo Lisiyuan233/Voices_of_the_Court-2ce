@@ -35,14 +35,17 @@ import { buildSaveFactSettings } from "./saveFacts/saveFactSettings.js";
 import { buildSaveFactDiagnosticsDto, createEmptyConversationFactContext, type ConversationFactContext } from "./saveFacts/saveFactTypes.js";
 import { loadCampaignStoreWithMigration, observedStateFromContext } from "./campaignBusiness.js";
 import { LetterManager } from "./letter/LetterManager.js";
+import { resolveLetterTimelineContextFromGameData } from "./letter/letterTimelineContext.js";
 import { BattleReportGenerator } from "./battleReport/BattleReportGenerator.js";
 import { parseLog } from "../shared/gameData/parseLog.js";
 import { parseLettersFromLog } from "./letter/parseLogForLetters.js";
-import { parseLogForBookmarks } from "./parseLogforbookmarks.js";
+import { parseBookmarkCampaignIdentityPayload, parseLogForBookmarks } from "./parseLogforbookmarks.js";
 import { processBookmarkToSummary } from "./bookmarktosummary.js";
 import { getPlayerId, getAllPlayerIds, readSummaryFile, saveSummaryFile, readCharacterMap, saveCharacterMap } from "./summaryManager.js";
+import { clearSummariesForScope, readSummaryCharacterMapObject } from "./conversation/summaryCampaignStore.js";
 import { parseDiaryIdsFromLog, getAllDiaryPlayerIds, getDiaryFiles, readDiaryFile, saveDiaryFile, getCharacterMap as getDiaryCharacterMap, readDiarySummaries, saveDiarySummaries, getAllDiarySummaries, archiveFutureDiaryRecordsForPlayer, saveAllDiarySummariesMerged, type DiaryVisibilityContext } from "./diaryManager.js";
 import { registerTimelineIpc, resolveTimelineWindowRequest } from "./ipc/timelineIpc.js";
+import { consumeTimelineCommitResultsFromLog } from "./timelineCommitResult.js";
 import type { TimelineWindowContext } from "./managerClipboardPayload.js";
 import { decideManagerWindowContext } from "./managerClipboardPayload.js";
 import { reportUnsupportedTimelineSchema } from "./timelineRegistryRecovery.js";
@@ -311,7 +314,7 @@ const LETTER_DELIVERY_TIMEOUT_MS = 60_000; // 60 seconds — if no VOTC:LETTER_A
 
 function rehydratePendingReplyLetters(playerId: string): void {
     const letterManager = LetterManager.getInstance();
-    const allLetters = letterManager.getAllLetters(playerId);
+    const allLetters = letterManager.getAllLettersAcrossCampaigns(playerId);
 
     const pendingReplies = allLetters.filter(l =>
         !l.isPlayerSender &&
@@ -542,12 +545,27 @@ app.on('ready',  async () => {
     loadTranslations(config.language);
     console.log('Configuration loaded successfully.');
 
+    // F21: inject the letter store's user-data dir and the current-identity
+    // resolver. The resolver derives the timeline context (campaign identity
+    // + registry + current node) from the ACTIVE conversation's game data,
+    // mirroring the campaignIdentityResolver channel used elsewhere in this
+    // file; LetterManager itself never resolves identity via electron.
+    LetterManager.getInstance().configure({
+        userDataDir: app.getPath('userData'),
+        resolveContext: () => (conversation
+            ? resolveLetterTimelineContextFromGameData(conversation.gameData)
+            : undefined)
+    });
+
     // Initialize the current game date from the last known VOTC:DATE in the log.
     await initCurrentDateFromLog();
 
     // Re-hydrate any pending reply letters that were not delivered before the last app restart.
     const letterManager = LetterManager.getInstance();
-    for (const { id } of letterManager.getAllPlayerIdsWithLetters()) {
+    // F21: scan the legacy store AND every campaign store — pending replies
+    // live in the campaign that wrote them, and delivery must not depend on
+    // which campaign happens to be reopened first.
+    for (const { id } of letterManager.getAllPlayerIdsWithLetters('all')) {
         rehydratePendingReplyLetters(id);
     }
 
@@ -882,7 +900,29 @@ app.on('ready',  async () => {
     chronicleCoordinator = new ChronicleCoordinator(app.getPath('userData'), () => buildChronicleCoordinatorConfig(config));
     console.log('Chronicle coordinator initialized.');
 
+    // P5 save facts (1.x main.ts parity, agency/session/delta parts deferred to
+    // P5b). Any initialization failure only disables save facts for this session.
+    // NOTE: these declarations must stay above initializeSaveSnapshotCoordinator()
+    // — everything from app.on('ready') down to ~line 3150 is one async callback,
+    // so a later-positioned `let` would be in its temporal dead zone here.
+    let saveSnapshotCoordinator: SaveSnapshotCoordinator | undefined;
+    let lastSaveFactDiagnostics: ReturnType<typeof buildSaveFactDiagnosticsDto> | null = null;
+    let conversationStartGeneration = 0;
+    // P5 (1.x Task 16 step 2 parity): abort the previous start's snapshot wait so
+    // a superseded prepare cannot occupy the coordinator queue for up to the full
+    // deadline while the new conversation waits behind it.
+    let conversationStartAbort: AbortController | null = null;
+
     initializeSaveSnapshotCoordinator();
+
+    // F22 (1.x main.ts:600 parity): consume VOTC:TIMELINE commit_result lines
+    // left over from the previous session so battle report history records get
+    // their outcome stamps even when CK3 wrote them after the app closed.
+    try {
+        consumeTimelineCommitResultsFromLog(path.join(config.userFolderPath, 'logs', 'debug.log'), app.getPath('userData'));
+    } catch (error) {
+        console.error('[timeline] Failed to consume timeline commit results at startup:', error);
+    }
 
     startLogTailing();
 
@@ -932,36 +972,22 @@ ipcMain.on('clear-summaries', ()=>{
       dialog.showMessageBox(dialogOpts).then((returnValue) => {
         console.log(`User chose to ${returnValue.response === 0 ? 'confirm' : 'cancel'} clearing summaries.`);
         if (returnValue.response === 0){
-            const remPath = path.join(userDataPath, 'conversation_summaries');
-
-            fs.readdir(remPath, (err, files) => {
-                if (err) throw err;
-
-                for(const file of files){
-                    const filePath = path.join(remPath, file);
-                    fs.rmSync(filePath, { recursive: true, force: true });
-                    console.log(`Removed summary file: ${filePath}`);
-                }
-
-
-            })
+            // F24: "clear summaries" clears the ACTIVE IDENTITY SCOPE. With an
+            // active campaign conversation the campaign conversation_summaries
+            // store is the primary target, and the legacy flat dir of the SAME
+            // player is removed as well so leftover flat records (pre-migration
+            // data or degraded-session writes) cannot resurrect old summaries
+            // on the next union read. Without an active conversation (or
+            // without a captured identity) the whole legacy flat store is
+            // cleared — the pre-F24 behavior.
+            const identity = conversation?.campaignIdentity;
+            const activePlayerId = conversation ? String(conversation.gameData.playerID) : undefined;
+            clearSummariesForScope(userDataPath, app.getPath('userData'), activePlayerId, identity);
         }
       })
 })
 
 let conversation: Conversation;
-
-// ---------------------------------------------------------------------------
-// P5 save facts (1.x main.ts parity, agency/session/delta parts deferred to
-// P5b). Any initialization failure only disables save facts for this session.
-// ---------------------------------------------------------------------------
-let saveSnapshotCoordinator: SaveSnapshotCoordinator | undefined;
-let lastSaveFactDiagnostics: ReturnType<typeof buildSaveFactDiagnosticsDto> | null = null;
-let conversationStartGeneration = 0;
-// P5 (1.x Task 16 step 2 parity): abort the previous start's snapshot wait so
-// a superseded prepare cannot occupy the coordinator queue for up to the full
-// deadline while the new conversation waits behind it.
-let conversationStartAbort: AbortController | null = null;
 
 interface SaveFactUiStatus {
     state: 'loading' | 'available' | 'disabled' | 'fallback' | 'unsupported';
@@ -1283,7 +1309,7 @@ clipboardListener.on('VOTC:LETTER_ACCEPTED', async () => {
     }
 });
 
-clipboardListener.on('VOTC:BOOKMARK', async () => {
+clipboardListener.on('VOTC:BOOKMARK', async (payloads?: string[]) => {
     console.log('ClipboardListener: VOTC:BOOKMARK event detected.');
     try {
         // Wait briefly for log file to update
@@ -1299,6 +1325,12 @@ clipboardListener.on('VOTC:BOOKMARK', async () => {
             return;
         }
 
+        // 1.x main.ts:1531: recover the V2 campaign identity from the
+        // clipboard command payload. Fail-closed: without a valid identity
+        // the bookmark must not be written into the legacy, cross-campaign
+        // summary directory (F10).
+        const identity = parseBookmarkCampaignIdentityPayload(payloads, bookmarkData.player.id);
+
         // Get the selected bookmark script from config
         const bookmarkScriptPath = config.selectedBookmarkScript || 'standard/shaosong.json';
         console.log(`Using bookmark script: ${bookmarkScriptPath}`);
@@ -1306,8 +1338,9 @@ clipboardListener.on('VOTC:BOOKMARK', async () => {
         // Process the bookmark data and update conversation summaries
         await processBookmarkToSummary(
             bookmarkData,
-            path.join(app.getPath("userData"), 'votc_data'),
-            bookmarkScriptPath
+            app.getPath("userData"),
+            bookmarkScriptPath,
+            identity
         );
 
         console.log('Bookmark processing completed successfully.');
@@ -1422,8 +1455,12 @@ clipboardListener.on('VOTC:LETTER', async () => {
         }
 
         // Get all letters for the player and find the most recent one by creation date.
-        const allPlayerLetters = letterManager.getAllLetters(playerId);
-        const latestLetter = letterManager.getLatestLetter(playerId);
+        // F21: the freshly parsed gameData (not the injected conversation
+        // resolver) is the authority here — letters can arrive without any
+        // open conversation.
+        const letterTimelineContext = resolveLetterTimelineContextFromGameData(gameData);
+        const allPlayerLetters = letterManager.getAllLetters(playerId, undefined, letterTimelineContext);
+        const latestLetter = letterManager.getLatestLetter(playerId, letterTimelineContext);
 
         if (!latestLetter) {
             console.error("VOTC:LETTER event, but no letters found after import.");
@@ -1474,7 +1511,7 @@ clipboardListener.on('VOTC:LETTER', async () => {
         }
 
         // Mark original letter as 'generating'
-        letterManager.updateLetterStatus(playerId, recipientId, latestLetter.id, 'generating');
+        letterManager.updateLetterStatus(playerId, recipientId, latestLetter.id, 'generating', letterTimelineContext);
         if (configWindow && !configWindow.window.isDestroyed()) {
             configWindow.window.webContents.send('letter-status-changed');
         }
@@ -1568,34 +1605,42 @@ clipboardListener.on('VOTC:BATTLE_REPORT', async () => {
         const debugLogPath = path.join(config.userFolderPath, 'logs', 'debug.log');
         const gameData = await parseLog(debugLogPath);
         if (!gameData) {
-            console.error('Failed to parse game data from debug.log for battle report event.');
-            return;
+            // 1.x main.ts:1695-1697: a failed full-snapshot parse must not
+            // block the battle report — it is still generated from the
+            // battle log data only.
+            console.warn('Failed to parse full game data from debug.log; generating battle report from battle log data only.');
         }
 
-        // Overwrite stale date from parseLog with the fresh, tailed date
-        gameData.totalDays = currentTotalDays;
-        gameData.date = totalDaysToDateString(currentTotalDays);
+        if (gameData) {
+            // Overwrite stale date from parseLog with the fresh, tailed date
+            gameData.totalDays = currentTotalDays;
+            gameData.date = totalDaysToDateString(currentTotalDays);
+        }
+
+        // P2 chronicle observation (1.x main.ts:1699-1715): battle source
+        // feed. Runs BEFORE generateBattleReport so a generation failure
+        // cannot lose the observation (F9, aligns 1.x order); fail-open.
+        if (gameData && gameData.playerID) {
+            try {
+                await observeParsedGameDataForChronicle(app.getPath('userData'), gameData, 'battle_report', config.language);
+            } catch (chronicleErr) {
+                const code = chronicleErr instanceof ChronicleStoreError ? chronicleErr.code : undefined;
+                let storePath: string | undefined;
+                try {
+                    const identity = requireCampaignIdentity({
+                        playerID: gameData.playerID,
+                        timelineSnapshotResult: gameData.timelineSnapshotResult
+                    });
+                    storePath = chronicleMemoryStorePath(app.getPath('userData'), identity);
+                    markChronicleUnhealthy(identity, code);
+                } catch { /* legacy-mod or invalid; nothing to mark */ }
+                console.error(`[Chronicle] observe failed (battle_report): code=${code ?? 'unknown'} path=${storePath ?? 'n/a'}`);
+            }
+        }
 
         const battleReportGenerator = new BattleReportGenerator(config, userDataPath);
         lastBattleReportGenerator = battleReportGenerator;
         await battleReportGenerator.generateBattleReport(gameData, debugLogPath, config.userFolderPath);
-
-        // P2 chronicle observation (1.x main.ts:1614): battle source feed.
-        try {
-            await observeParsedGameDataForChronicle(app.getPath('userData'), gameData, 'battle_report', config.language);
-        } catch (chronicleErr) {
-            const code = chronicleErr instanceof ChronicleStoreError ? chronicleErr.code : undefined;
-            let storePath: string | undefined;
-            try {
-                const identity = requireCampaignIdentity({
-                    playerID: gameData.playerID,
-                    timelineSnapshotResult: gameData.timelineSnapshotResult
-                });
-                storePath = chronicleMemoryStorePath(app.getPath('userData'), identity);
-                markChronicleUnhealthy(identity, code);
-            } catch { /* legacy-mod or invalid; nothing to mark */ }
-            console.error(`[Chronicle] observe failed (battle_report): code=${code ?? 'unknown'} path=${storePath ?? 'n/a'}`);
-        }
 
         // Notify config page to refresh status
         if (configWindow && !configWindow.window.isDestroyed()) {
@@ -2192,18 +2237,29 @@ ipcMain.handle('read-summary-file', async (event, playerId, checkpointEpoch?: nu
         // Resolve through the timeline context so node-tagged summaries are
         // filtered by branch visibility (no manager window context yet; the
         // legacy parts-only resolution keeps today's behavior until P7).
+        // F21: when the summary belongs to the ACTIVE conversation's player,
+        // its campaign identity and registry are used so campaign-scoped
+        // summary stores become visible here too.
         const { context, registry, identity } = resolveTimelineWindowRequest(undefined, playerId, checkpointEpoch);
-        const summaries = await readSummaryFile(userDataPath, playerId, checkpointEpoch ?? context.checkpointEpoch, registry, context.timelineNodeId, identity);
+        const activeLetterContext = conversation && String(conversation.gameData.playerID) === String(playerId)
+            ? resolveLetterTimelineContextFromGameData(conversation.gameData)
+            : undefined;
+        const summaries = await readSummaryFile(
+            userDataPath,
+            playerId,
+            checkpointEpoch ?? context.checkpointEpoch,
+            activeLetterContext?.registry ?? registry,
+            activeLetterContext?.currentNodeId ?? context.timelineNodeId,
+            activeLetterContext?.identity ?? identity
+        );
 
-        const characterMapPath = path.join(userDataPath, 'conversation_summaries', playerId, '_character_map.json');
-        let characterMap: {[key: string]: string} = {};
-        if (fs.existsSync(characterMapPath)) {
-            try {
-                characterMap = JSON.parse(fs.readFileSync(characterMapPath, 'utf8'));
-            } catch (e) {
-                console.error('Error reading character map:', e);
-            }
-        }
+        // F24: character map through the summary store exit — the campaign
+        // map wins per key when an identity is active, legacy flat map is
+        // the fallback/merge source.
+        const characterMap = readSummaryCharacterMapObject(
+            { votcDataRoot: userDataPath, userDataDir: app.getPath('userData'), playerId },
+            activeLetterContext?.identity
+        );
 
         const augmentedSummaries = summaries.map(summary => {
             let characterName = 'Unknown';
@@ -2223,7 +2279,24 @@ ipcMain.handle('read-summary-file', async (event, playerId, checkpointEpoch?: nu
 ipcMain.handle('save-summary-file', async (event, playerId, summaryData) => {
     console.log(`IPC: Received save-summary-file event for player: ${playerId}`);
     try {
-        await saveSummaryFile(userDataPath, playerId, summaryData);
+        // F24: route editor saves through the same scope the listing read
+        // from. When the save targets the ACTIVE conversation's player and
+        // that session holds a campaign identity, the timeline-aware merge
+        // save writes the campaign store (hidden sibling-branch records on
+        // disk survive); otherwise the legacy whole-overwrite path is kept.
+        const activeIdentity = conversation && String(conversation.gameData.playerID) === String(playerId)
+            ? conversation.campaignIdentity
+            : undefined;
+        if (activeIdentity) {
+            const activeContext = resolveLetterTimelineContextFromGameData(conversation.gameData);
+            await saveSummaryFile(userDataPath, playerId, summaryData, conversation.gameData.votcCheckpointEpoch, {
+                registry: activeContext.registry,
+                currentNodeId: activeContext.currentNodeId,
+                identity: activeIdentity
+            });
+        } else {
+            await saveSummaryFile(userDataPath, playerId, summaryData);
+        }
         return { success: true };
     } catch (error) {
         console.error('Error saving summary file:', error);
@@ -2249,9 +2322,14 @@ ipcMain.handle('save-all-letter-summaries', async (event, playerId: string, summ
     console.log(`IPC: Received save-all-letter-summaries event for player: ${playerId}`);
     try {
         const letterManager = LetterManager.getInstance();
-        const summaryDir = path.join(app.getPath('userData'), 'votc_data', 'letter_summaries', playerId);
-        const existingSummaryFiles = fs.existsSync(summaryDir) ? fs.readdirSync(summaryDir).filter(f => f.endsWith('.json') && f !== '_character_map.json') : [];
-        const existingCharIds = new Set(existingSummaryFiles.map(f => f.replace('.json', '')));
+        // F21: operate on the same store set the listing read from (campaign
+        // store when an identity context is available, legacy store always).
+        const summaryDirs = letterManager.getLetterSummaryDirsForPlayer(playerId);
+        const existingCharIds = new Set<string>();
+        for (const summaryDir of summaryDirs) {
+            const existingSummaryFiles = fs.existsSync(summaryDir) ? fs.readdirSync(summaryDir).filter(f => f.endsWith('.json') && f !== '_character_map.json') : [];
+            existingSummaryFiles.forEach(f => existingCharIds.add(f.replace('.json', '')));
+        }
 
         const summariesByCharacter: { [key: string]: any[] } = {};
         summariesData.forEach(summary => {
@@ -2271,10 +2349,12 @@ ipcMain.handle('save-all-letter-summaries', async (event, playerId: string, summ
 
         // Delete summaries for characters that were removed
         for (const charIdToDelete of existingCharIds) {
-            const summaryPath = path.join(summaryDir, `${charIdToDelete}.json`);
-            if (fs.existsSync(summaryPath)) {
-                fs.unlinkSync(summaryPath);
-                console.log(`Deleted letter summary for character ${charIdToDelete}`);
+            for (const summaryDir of summaryDirs) {
+                const summaryPath = path.join(summaryDir, `${charIdToDelete}.json`);
+                if (fs.existsSync(summaryPath)) {
+                    fs.unlinkSync(summaryPath);
+                    console.log(`Deleted letter summary for character ${charIdToDelete} in ${summaryDir}`);
+                }
             }
         }
 
@@ -2623,7 +2703,13 @@ ipcMain.handle('get-all-letters-for-player', async (event, playerId: string) => 
 ipcMain.on('get-letters', (event) => {
     console.log('IPC: Received get-letters event.');
     if (conversation) {
-        const letters = conversation.letterManager.getAllLetters(String(conversation.gameData.playerID), conversation.gameData.votcCheckpointEpoch);
+        // F21: reads route through the active conversation's timeline context
+        // (campaign-scoped store + graph visibility for anchored records).
+        const letters = conversation.letterManager.getAllLetters(
+            String(conversation.gameData.playerID),
+            conversation.gameData.votcCheckpointEpoch,
+            resolveLetterTimelineContextFromGameData(conversation.gameData)
+        );
         event.sender.send('letters-data', letters);
     } else {
         // Fallback for when conversation is not active, maybe check last player ID?
@@ -3141,7 +3227,10 @@ ipcMain.on('close-chronicle-window', () => {
 // 处理主题切换事件
 ipcMain.on('theme-changed', (event, theme: string) => {
     console.log(`IPC: Received theme-changed event. Theme: ${theme}`);
-    currentUiTheme = theme;
+    // 1.x main.ts:2212: normalize the incoming value against the app's
+    // theme set (original / chinese / west) so an unknown value can never
+    // be broadcast to every window (F14).
+    currentUiTheme = theme === 'original' || theme === 'west' ? theme : 'chinese';
 
     const windows = [
         configWindow,
@@ -3154,7 +3243,7 @@ ipcMain.on('theme-changed', (event, theme: string) => {
 
     windows.forEach(win => {
         if (win && win.window && !win.window.isDestroyed()) {
-            win.window.webContents.send('update-theme', theme);
+            win.window.webContents.send('update-theme', currentUiTheme);
         }
     });
 });

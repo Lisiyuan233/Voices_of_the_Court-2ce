@@ -291,6 +291,7 @@ export const SAVE_FACT_ERROR_CODES = [
     'SAVE_ENTRY_MISSING',
     'SAVE_BINARY_UNSUPPORTED',
     'SAVE_TOKEN_RESOLVER_MISSING',
+    'SAVE_TOKEN_VERSION_MISMATCH',
     'SAVE_VERSION_UNSUPPORTED',
     'SAVE_PARSE_FAILED',
     'SAVE_LIMIT_EXCEEDED',
@@ -632,12 +633,19 @@ export interface SaveFactCapabilityV1 {
     protocolVersion: 1 | 2 | 3;
 }
 
+export interface SaveFactBinarySaveSupportV1 {
+    status: 'ok' | 'unsupported';
+    /** CK3 game version the compiled-in token table covers (e.g. "1.19.0.6"). */
+    tokenTableVersion: string;
+}
+
 export interface SaveFactCapabilitiesResultV1 {
     protocolVersion: 1;
     operation: 'capabilities';
     status: 'ok' | 'unsupported';
     capabilities: readonly SaveFactCapabilityV1[];
     parserVersion?: string;
+    binarySaveSupport?: SaveFactBinarySaveSupportV1;
 }
 
 export interface SaveVerificationExpectedIdentityV2 {

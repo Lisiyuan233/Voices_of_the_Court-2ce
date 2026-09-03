@@ -1,0 +1,292 @@
+# Token Resolver Build Report
+
+- game version: `1.19.0.6`
+- pairs: 6
+- tokens resolved: 1107
+- lookup entries: 0
+- conflicts: 0
+- overrides applied: 1 (0x3fcc: needs_help -> needs_external_help)
+- ambiguous: 63455 windows / 124451 items
+- outputs: `out/ck3-tokens-1.19.0.6.json`, `out/ck3_tokens_1_19_0_6.rs`
+
+## votc_save_test1
+
+- id tokens: 3292930 occurrences, resolved 3292929 (100.00%), unresolved distinct: 1
+- lookup indices: 0 occurrences, resolved 0 (100.00%), unresolved distinct: 0
+- deserializer re-parse (Stringify): ok
+- path match: 4896182 text / 4913519 bin paths, matched 4896158 (99.65%)
+- drift: 24 text-only / 17361 bin-only path occurrences; value mismatches: 0
+- text-only samples:
+  - `/ai/war_coordinator_db/9/can_counter_invade`
+  - `/ai/war_coordinator_db/6/can_counter_invade`
+  - `/playthrough_timer`
+  - `/ai/war_coordinator_db/3/unit_stack/is_chasing`
+  - `/ai/war_coordinator_db/7/can_counter_invade`
+  - `/ai/war_coordinator_db/7/unit_stack/is_merging`
+  - `/ai/war_coordinator_db/6/unit_stack/is_retreating`
+  - `/ai/war_coordinator_db/9/unit_stack/is_retreating`
+  - `/ai/war_coordinator_db/11/attacker`
+  - `/ai/war_coordinator_db/0/attacker`
+  - `/ai/war_coordinator_db/14/attacker`
+  - `/ai/war_coordinator_db/12/attacker`
+  - `/ai/war_coordinator_db/16/attacker`
+  - `/ai/war_coordinator_db/3/attacker`
+  - `/ai/war_coordinator_db/16/is_player_war`
+  - `/ai/war_coordinator_db/2/attacker`
+  - `/ai/war_coordinator_db/13/can_counter_invade`
+  - `/ai/war_coordinator_db/15/can_counter_invade`
+  - `/ai/war_coordinator_db/0/unit_stack/is_merging`
+  - `/ai/war_coordinator_db/1/unit_stack/is_merging`
+- bin-only samples:
+  - `/provinces/6665/holding/buildings/[]`
+  - `/provinces/12736/holding/buildings/[]`
+  - `/provinces/5792/holding/buildings/[]`
+  - `/provinces/1429/holding/buildings/[]`
+  - `/provinces/6385/holding/buildings/[]`
+  - `/provinces/12490/holding/buildings/[]`
+  - `/provinces/3825/holding/buildings/[]`
+  - `/provinces/3851/holding/buildings/[]`
+  - `/provinces/3838/holding/buildings/[]`
+  - `/provinces/11850/holding/buildings/[]`
+  - `/provinces/703/holding/buildings/[]`
+  - `/provinces/8622/holding/buildings/[]`
+  - `/provinces/8109/holding/buildings/[]`
+  - `/provinces/3947/holding/buildings/[]`
+  - `/provinces/12237/holding/buildings/[]`
+  - `/provinces/6202/holding/buildings/[]`
+  - `/provinces/7359/holding/buildings/[]`
+  - `/provinces/6999/holding/buildings/[]`
+  - `/provinces/4451/holding/buildings/[]`
+  - `/provinces/144/holding/buildings/[]`
+- unresolved tokens:
+  - `0x39e7`
+
+## votc_save_test2
+
+- id tokens: 3646298 occurrences, resolved 3646297 (100.00%), unresolved distinct: 1
+- lookup indices: 0 occurrences, resolved 0 (100.00%), unresolved distinct: 0
+- deserializer re-parse (Stringify): ok
+- path match: 5501843 text / 5520282 bin paths, matched 5501842 (99.67%)
+- drift: 1 text-only / 18440 bin-only path occurrences; value mismatches: 0
+- text-only samples:
+  - `/playthrough_timer`
+- bin-only samples:
+  - `/provinces/559/holding/buildings/[]`
+  - `/provinces/7587/holding/buildings/[]`
+  - `/provinces/9364/holding/buildings/[]`
+  - `/provinces/12275/holding/buildings/[]`
+  - `/provinces/4587/holding/buildings/[]`
+  - `/provinces/9665/holding/buildings/[]`
+  - `/provinces/13104/holding/buildings/[]`
+  - `/provinces/2780/holding/buildings/[]`
+  - `/provinces/11156/holding/buildings/[]`
+  - `/provinces/5415/holding/buildings/[]`
+  - `/provinces/1453/holding/buildings/[]`
+  - `/provinces/3508/holding/buildings/[]`
+  - `/provinces/991/holding/buildings/[]`
+  - `/provinces/8401/holding/buildings/[]`
+  - `/provinces/11557/holding/buildings/[]`
+  - `/provinces/8529/holding/buildings/[]`
+  - `/provinces/12522/holding/buildings/[]`
+  - `/provinces/3904/holding/buildings/[]`
+  - `/provinces/9673/holding/buildings/[]`
+  - `/provinces/12688/holding/buildings/[]`
+- unresolved tokens:
+  - `0x39e7`
+
+## votc_save_test3
+
+- id tokens: 2613761 occurrences, resolved 2613760 (100.00%), unresolved distinct: 1
+- lookup indices: 0 occurrences, resolved 0 (100.00%), unresolved distinct: 0
+- deserializer re-parse (Stringify): ok
+- path match: 3671902 text / 3687452 bin paths, matched 3671901 (99.58%)
+- drift: 1 text-only / 15551 bin-only path occurrences; value mismatches: 0
+- text-only samples:
+  - `/playthrough_timer`
+- bin-only samples:
+  - `/provinces/5816/holding/buildings/[]`
+  - `/provinces/5454/holding/buildings/[]`
+  - `/provinces/2657/holding/buildings/[]`
+  - `/provinces/5669/holding/buildings/[]`
+  - `/provinces/8666/holding/buildings/[]`
+  - `/provinces/4932/holding/buildings/[]`
+  - `/provinces/3505/holding/buildings/[]`
+  - `/provinces/8365/holding/buildings/[]`
+  - `/provinces/12343/holding/buildings/[]`
+  - `/provinces/2722/holding/buildings/[]`
+  - `/provinces/8417/holding/buildings/[]`
+  - `/provinces/4480/holding/buildings/[]`
+  - `/provinces/11566/holding/buildings/[]`
+  - `/provinces/6909/holding/buildings/[]`
+  - `/provinces/12378/holding/buildings/[]`
+  - `/provinces/10427/holding/buildings/[]`
+  - `/provinces/5872/holding/buildings/[]`
+  - `/provinces/162/holding/buildings/[]`
+  - `/provinces/6126/holding/buildings/[]`
+  - `/provinces/8145/holding/buildings/[]`
+- unresolved tokens:
+  - `0x39e7`
+
+## votc_save_test4
+
+- id tokens: 8292798 occurrences, resolved 8292796 (100.00%), unresolved distinct: 2
+- lookup indices: 0 occurrences, resolved 0 (100.00%), unresolved distinct: 0
+- deserializer re-parse (Stringify): ok
+- path match: 11522739 text / 11539419 bin paths, matched 11522693 (99.86%)
+- drift: 46 text-only / 16726 bin-only path occurrences; value mismatches: 0
+- text-only samples:
+  - `/ai/war_coordinator_db/167772172/attacker`
+  - `/ai/war_coordinator_db/234881081/attacker`
+  - `/ai/war_coordinator_db/117440535/attacker`
+  - `/ai/war_coordinator_db/134217730/can_counter_invade`
+  - `/ai/war_coordinator_db/234881090/attacker`
+  - `/ai/war_coordinator_db/201326612/can_counter_invade`
+  - `/ai/war_coordinator_db/218103817/can_counter_invade`
+  - `/ai/war_coordinator_db/285212713/attacker`
+  - `/ai/war_coordinator_db/167772196/can_counter_invade`
+  - `/ai/war_coordinator_db/218103816/attacker`
+  - `/ai/war_coordinator_db/167772189/attacker`
+  - `/ai/war_coordinator_db/268435523/can_counter_invade`
+  - `/ai/war_coordinator_db/184549403/unit_stack/is_merging`
+  - `/ai/war_coordinator_db/234881094/attacker`
+  - `/ai/war_coordinator_db/150994982/can_counter_invade`
+  - `/ai/war_coordinator_db/251658250/can_counter_invade`
+  - `/ai/war_coordinator_db/234881095/unit_stack/subunit_stack/needs_help`
+  - `/ai/war_coordinator_db/251658251/unit_stack/is_merging`
+  - `/ai/war_coordinator_db/234881095/attacker`
+  - `/ai/war_coordinator_db/251658288/attacker`
+- bin-only samples:
+  - `/provinces/5454/holding/buildings/[]`
+  - `/provinces/12714/holding/buildings/[]`
+  - `/provinces/11747/holding/buildings/[]`
+  - `/provinces/8573/holding/buildings/[]`
+  - `/provinces/6546/holding/buildings/[]`
+  - `/provinces/11297/holding/buildings/[]`
+  - `/provinces/8646/holding/buildings/[]`
+  - `/provinces/1641/holding/buildings/[]`
+  - `/provinces/10707/holding/buildings/[]`
+  - `/provinces/12615/holding/buildings/[]`
+  - `/provinces/5158/holding/buildings/[]`
+  - `/provinces/712/holding/buildings/[]`
+  - `/provinces/5913/holding/buildings/[]`
+  - `/provinces/5687/holding/buildings/[]`
+  - `/provinces/10228/holding/buildings/[]`
+  - `/provinces/11497/holding/buildings/[]`
+  - `/provinces/2599/holding/buildings/[]`
+  - `/provinces/10616/holding/buildings/[]`
+  - `/provinces/962/holding/buildings/[]`
+  - `/provinces/3237/holding/buildings/[]`
+- unresolved tokens:
+  - `0x39e7`
+  - `0x3fcd`
+
+## votc_save_test5
+
+- id tokens: 12291982 occurrences, resolved 12291976 (100.00%), unresolved distinct: 2
+- lookup indices: 0 occurrences, resolved 0 (100.00%), unresolved distinct: 0
+- deserializer re-parse (Stringify): ok
+- path match: 16883002 text / 16898107 bin paths, matched 16882896 (99.91%)
+- drift: 106 text-only / 15211 bin-only path occurrences; value mismatches: 0
+- text-only samples:
+  - `/ai/war_coordinator_db/671088650/unit_stack/is_chasing_carelessly`
+  - `/ai/war_coordinator_db/150995017/can_counter_invade`
+  - `/ai/war_coordinator_db/587202609/attacker`
+  - `/ai/war_coordinator_db/50331737/can_counter_invade`
+  - `/ai/war_coordinator_db/100663379/can_counter_invade`
+  - `/ai/war_coordinator_db/855638020/can_counter_invade`
+  - `/ai/war_coordinator_db/687865910/unit_stack/subunit_stack/needs_help_changed`
+  - `/ai/war_coordinator_db/150995017/unit_stack/is_merging`
+  - `/ai/war_coordinator_db/704643114/attacker`
+  - `/ai/war_coordinator_db/855638076/unit_stack/is_merging`
+  - `/ai/war_coordinator_db/687865864/attacker`
+  - `/ai/war_coordinator_db/50331736/attacker`
+  - `/ai/war_coordinator_db/687865912/can_counter_invade`
+  - `/ai/war_coordinator_db/201326656/unit_stack/is_merging`
+  - `/ai/war_coordinator_db/603979828/attacker`
+  - `/ai/war_coordinator_db/754974744/can_counter_invade`
+  - `/ai/war_coordinator_db/721420331/attacker`
+  - `/ai/war_coordinator_db/889192466/attacker`
+  - `/ai/war_coordinator_db/201326656/can_counter_invade`
+  - `/ai/war_coordinator_db/620757033/attacker`
+- bin-only samples:
+  - `/provinces/6614/holding/buildings/[]`
+  - `/provinces/5687/holding/buildings/[]`
+  - `/provinces/1660/holding/buildings/[]`
+  - `/provinces/6516/holding/buildings/[]`
+  - `/provinces/3821/holding/buildings/[]`
+  - `/provinces/6615/holding/buildings/[]`
+  - `/provinces/809/holding/buildings/[]`
+  - `/provinces/1575/holding/buildings/[]`
+  - `/provinces/6712/holding/buildings/[]`
+  - `/provinces/3902/holding/buildings/[]`
+  - `/provinces/1280/holding/buildings/[]`
+  - `/provinces/6552/holding/buildings/[]`
+  - `/provinces/11873/holding/buildings/[]`
+  - `/provinces/11628/holding/buildings/[]`
+  - `/provinces/7581/holding/buildings/[]`
+  - `/provinces/1437/holding/buildings/[]`
+  - `/provinces/6211/holding/buildings/[]`
+  - `/provinces/6676/holding/buildings/[]`
+  - `/provinces/9681/holding/buildings/[]`
+  - `/provinces/4067/holding/buildings/[]`
+- unresolved tokens:
+  - `0x39e7`
+  - `0x3fcd`
+
+## votc_save_test6
+
+- id tokens: 12294655 occurrences, resolved 12294652 (100.00%), unresolved distinct: 2
+- lookup indices: 0 occurrences, resolved 0 (100.00%), unresolved distinct: 0
+- deserializer re-parse (Stringify): ok
+- path match: 17206697 text / 17222217 bin paths, matched 17206497 (99.91%)
+- drift: 200 text-only / 15720 bin-only path occurrences; value mismatches: 0
+- text-only samples:
+  - `/ai/war_coordinator_db/637534296/can_counter_invade`
+  - `/ai/war_coordinator_db/738197741/unit_stack/is_merging`
+  - `/ai/war_coordinator_db/956301316/unit_stack/is_merging`
+  - `/ai/war_coordinator_db/822083815/unit_stack/subunit_stack/needs_external_help_enemy_power`
+  - `/ai/war_coordinator_db/939524294/attacker`
+  - `/ai/war_coordinator_db/704643249/unit_stack/is_retreating`
+  - `/ai/war_coordinator_db/1023410286/unit_stack/is_merging`
+  - `/ai/war_coordinator_db/738197675/can_counter_invade`
+  - `/ai/war_coordinator_db/503316661/attacker`
+  - `/ai/war_coordinator_db/889192627/can_counter_invade`
+  - `/ai/war_coordinator_db/838860866/attacker`
+  - `/ai/war_coordinator_db/704643245/unit_stack/is_chasing`
+  - `/ai/war_coordinator_db/956301496/attacker`
+  - `/ai/war_coordinator_db/822083815/unit_stack/subunit_stack/needs_help_changed`
+  - `/ai/war_coordinator_db/788529289/attacker`
+  - `/ai/war_coordinator_db/687865938/unit_stack/is_merging`
+  - `/ai/war_coordinator_db/822083746/unit_stack/is_merging`
+  - `/ai/war_coordinator_db/1073742042/unit_stack/is_merging`
+  - `/ai/war_coordinator_db/872415327/can_counter_invade`
+  - `/ai/war_coordinator_db/872415232/attacker`
+- bin-only samples:
+  - `/provinces/7283/holding/buildings/[]`
+  - `/provinces/3819/holding/buildings/[]`
+  - `/provinces/6037/holding/buildings/[]`
+  - `/provinces/6482/holding/buildings/[]`
+  - `/provinces/11227/holding/buildings/[]`
+  - `/provinces/10412/holding/buildings/[]`
+  - `/provinces/3813/holding/buildings/[]`
+  - `/provinces/12920/holding/buildings/[]`
+  - `/provinces/8786/holding/buildings/[]`
+  - `/provinces/8596/holding/buildings/[]`
+  - `/provinces/2313/holding/buildings/[]`
+  - `/provinces/5292/holding/buildings/[]`
+  - `/provinces/4159/holding/buildings/[]`
+  - `/provinces/11019/holding/buildings/[]`
+  - `/provinces/4243/holding/buildings/[]`
+  - `/provinces/8071/holding/buildings/[]`
+  - `/provinces/5347/holding/buildings/[]`
+  - `/provinces/10624/holding/buildings/[]`
+  - `/provinces/2350/holding/buildings/[]`
+  - `/provinces/12839/holding/buildings/[]`
+- unresolved tokens:
+  - `0x39e7`
+  - `0x3fcd`
+
+## Single-pair consistency
+
+3 份单对独立建表之间零冲突。
+

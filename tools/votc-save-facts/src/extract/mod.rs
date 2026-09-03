@@ -181,6 +181,12 @@ fn scan_titles<R: Read>(
             Token::Eof => return Err(IdentityError::Truncated),
             Token::Scalar(id_bytes) | Token::Str(id_bytes) => {
                 scanner.expect_eq()?;
+                // 真实 1.19 存档把 title 记录嵌套在第二层 `landed_titles` 块中
+                // （第一层只有 dynamic_templates 元数据），递归进入同一扫描。
+                if id_bytes == b"landed_titles" {
+                    scan_titles(scanner, sink, title_index, index_warned)?;
+                    continue;
+                }
                 // Real saves include metadata entries such as
                 // `dynamic_templates={...}` in this block.
                 if id_bytes.is_empty() || !id_bytes.iter().all(|b| b.is_ascii_digit()) {

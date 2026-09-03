@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { BookmarkData, BookmarkPlayer } from './parseLogforbookmarks.js';
+import type { CampaignPlayerIdentity } from '../shared/gameData/CampaignIdentity.js';
+import { conversationSummariesDir } from './campaignDataPaths.js';
 
 /**
  * 书签条目接口
@@ -34,20 +36,28 @@ type ConversationSummary = SummaryEntry[];
 
 /**
  * 处理书签数据并将其写入角色对话摘要文件
- * 
+ *
  * @param bookmarkData 从游戏日志中解析出的书签数据，包含玩家信息和角色映射
- * @param userDataPath 用户数据路径，用于定位脚本和摘要文件
+ * @param userDataPath 用户数据根目录，用于定位脚本和摘要文件
  * @param bookmarkScriptPath 书签脚本文件路径，相对于bookmarks目录
+ * @param identity 已验证的 V2 campaign/player 身份，用于隔离摘要存储（1.x bookmarktosummary.ts:45-57，F10）
  */
 export async function processBookmarkToSummary(
     bookmarkData: BookmarkData,
     userDataPath: string,
-    bookmarkScriptPath: string
+    bookmarkScriptPath: string,
+    identity: CampaignPlayerIdentity
 ): Promise<void> {
     console.log(`正在为玩家 ${bookmarkData.player.name} 处理书签摘要`);
-    
+
+    if (identity.playerId !== bookmarkData.player.id) {
+        throw new Error(
+            `Bookmark player mismatch: data contains ${bookmarkData.player.id}, identity contains ${identity.playerId}.`
+        );
+    }
+
     // 构建书签脚本文件的完整路径
-    const fullBookmarkPath = path.join(userDataPath, 'scripts', 'bookmarks', bookmarkScriptPath);
+    const fullBookmarkPath = path.join(userDataPath, 'votc_data', 'scripts', 'bookmarks', bookmarkScriptPath);
     
     // 检查书签脚本文件是否存在
     if (!fs.existsSync(fullBookmarkPath)) {
@@ -89,8 +99,10 @@ export async function processBookmarkToSummary(
     
     console.log(`找到 ${matchingEntries.length} 个匹配的书签条目`);
     
-    // 创建对话摘要目录（如果不存在）
-    const summaryDir = path.join(userDataPath, 'conversation_summaries', bookmarkData.player.id);
+    // 创建对话摘要目录（如果不存在）——按 campaign/player 身份隔离落盘
+    // （2CE campaignDataPaths 惯例：<userData>/votc_data/campaigns/<cid>/
+    //   players/<pid>/conversation_summaries）
+    const summaryDir = conversationSummariesDir(userDataPath, identity);
     
     if (!fs.existsSync(summaryDir)) {
         fs.mkdirSync(summaryDir, { recursive: true });

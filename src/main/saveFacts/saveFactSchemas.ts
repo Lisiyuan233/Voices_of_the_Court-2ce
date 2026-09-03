@@ -35,6 +35,7 @@ import type {
     CanonicalEntityV1,
     EntityRef,
     ExtractedGameFactV1,
+    SaveFactCapabilitiesResultV1,
     SaveFactErrorCode,
     SaveFactExtractionResultV1,
     SaveFactResultStatus
@@ -49,6 +50,7 @@ export type SaveFactValidationFailureCode =
     | 'INVALID_ID'
     | 'INVALID_ENUM'
     | 'INVALID_TYPE'
+    | 'INVALID_VALUE'
     | 'NON_FINITE_NUMBER'
     | 'METRIC_OUT_OF_RANGE'
     | 'MISSING_FIELD'
@@ -748,11 +750,129 @@ export function validateSaveFactExtractionResult(input: unknown): SaveFactValida
     }
 }
 
-// P5b deferred (verify/session/delta/agency): 1.x re-exported
-// `validateSaveFactCapabilitiesResult`, `validateSaveVerificationRequestV2`
-// and `validateSaveVerificationResponseV2` from
-// `./saveFactVerificationSchemas` here ("P1-A protocol v2 validators live in a
-// separate file..."). That file is not ported to 2CE and the capabilities /
-// verification ops are deferred, so the re-export (and the only consumers, the
-// agency-facing client op paths) are removed. The v1 extraction validator
-// above keeps its strict wire contract and error paths unchanged.
+// ---------------------------------------------------------------------------
+// Capabilities response validator (minimal whitelist face)
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal port of the 1.x `validateSaveFactCapabilitiesResult` whitelist:
+ * the capabilities response is the only additional surface this file needs so
+ * the sidecar's `binary_save_support` capability (status + token table
+ * version) and the `SAVE_TOKEN_VERSION_MISMATCH` error code it gates stay
+ * inside a strict same-version contract. Everything else that lives in 1.x's
+ * `saveFactVerificationSchemas.ts` remains deferred, see the P5b note below.
+ */
+
+// INVALID_VALUE exists only for the capabilities validator below (mirrors the
+// 1.x saveFactVerificationSchemas code set); the extraction validator never
+// emits it.
+export type SaveFactCapabilitiesValidationCode = SaveFactValidationFailureCode;
+
+export type SaveFactCapabilitiesValidationResult =
+    | { ok: true; value: SaveFactCapabilitiesResultV1 }
+    | { ok: false; code: SaveFactCapabilitiesValidationCode; path: string; message: string };
+
+const CAPABILITIES_KEYS = [
+    'protocolVersion', 'operation', 'status', 'capabilities', 'parserVersion', 'binarySaveSupport'
+] as const;
+const CAPABILITY_KEYS = ['operation', 'protocolVersion'] as const;
+const BINARY_SAVE_SUPPORT_KEYS = ['status', 'tokenTableVersion'] as const;
+const MAX_CAPABILITIES = 16;
+/** Version strings ("0.1.0", "1.19.0.6") ride the short-string bound. */
+const MAX_CAPABILITY_VERSION_LENGTH = SAVE_FACT_RESPONSE_MAX_SHORT_STRING_LENGTH;
+
+/**
+ * Validate a parsed sidecar capabilities response against the protocol v1
+ * whitelist. Never throws; returns a discriminated result. Unknown fields are
+ * rejected at every level, mirroring the extraction validator above.
+ */
+export function validateSaveFactCapabilitiesResult(input: unknown): SaveFactCapabilitiesValidationResult {
+    try {
+        assertStructurallySafe(input, '$');
+
+        const root = requirePlainObject(input, '$', CAPABILITIES_KEYS);
+        const protocolVersion = requireField(root, 'protocolVersion', '$');
+        if (protocolVersion !== 1) {
+            fail(
+                'UNSUPPORTED_PROTOCOL_VERSION',
+                '$.protocolVersion',
+                `expected 1, got ${JSON.stringify(protocolVersion)}`
+            );
+        }
+        const operation = requireEnum(requireField(root, 'operation', '$'), '$.operation', ['capabilities'] as const);
+        const status = requireEnum(requireField(root, 'status', '$'), '$.status', ['ok', 'unsupported'] as const);
+
+        const capabilitiesRaw = requireArray(requireField(root, 'capabilities', '$'), '$.capabilities', MAX_CAPABILITIES);
+        const capabilities = capabilitiesRaw.map((value, i) => {
+            const capability = requirePlainObject(value, `$.capabilities[${i}]`, CAPABILITY_KEYS);
+            const capabilityOperation = requireEnum(
+                requireField(capability, 'operation', `$.capabilities[${i}]`),
+                `$.capabilities[${i}].operation`,
+                ['probe', 'extract', 'verify', 'session'] as const
+            );
+            const rawVersion = requireIntegerInRange(
+                requireField(capability, 'protocolVersion', `$.capabilities[${i}]`),
+                `$.capabilities[${i}].protocolVersion`,
+                1,
+                3
+            ) as 1 | 2 | 3;
+            // Frozen pairing: session is v3 only; legacy ops stay v1/v2.
+            const validPair = capabilityOperation === 'session' ? rawVersion === 3 : rawVersion !== 3;
+            if (!validPair) fail('INVALID_VALUE', `$.capabilities[${i}].protocolVersion`, `wrong version for ${capabilityOperation}`);
+            return { operation: capabilityOperation, protocolVersion: rawVersion };
+        });
+
+        const parserVersionRaw = root['parserVersion'];
+        const parserVersion = parserVersionRaw === undefined
+            ? undefined
+            : requireString(parserVersionRaw, '$.parserVersion', MAX_CAPABILITY_VERSION_LENGTH);
+
+        const binarySaveSupportRaw = root['binarySaveSupport'];
+        const binarySaveSupport = binarySaveSupportRaw === undefined
+            ? undefined
+            : (() => {
+                const support = requirePlainObject(binarySaveSupportRaw, '$.binarySaveSupport', BINARY_SAVE_SUPPORT_KEYS);
+                return {
+                    status: requireEnum(
+                        requireField(support, 'status', '$.binarySaveSupport'),
+                        '$.binarySaveSupport.status',
+                        ['ok', 'unsupported'] as const
+                    ),
+                    tokenTableVersion: requireString(
+                        requireField(support, 'tokenTableVersion', '$.binarySaveSupport'),
+                        '$.binarySaveSupport.tokenTableVersion',
+                        MAX_CAPABILITY_VERSION_LENGTH
+                    )
+                };
+            })();
+
+        const result: SaveFactCapabilitiesResultV1 = {
+            protocolVersion: 1,
+            operation,
+            status,
+            capabilities
+        };
+        if (parserVersion !== undefined) result.parserVersion = parserVersion;
+        if (binarySaveSupport !== undefined) result.binarySaveSupport = binarySaveSupport;
+        return { ok: true, value: result };
+    } catch (error) {
+        if (error instanceof SaveFactValidationError) {
+            return { ok: false, code: error.code, path: error.path, message: error.message };
+        }
+        return {
+            ok: false,
+            code: 'INVALID_TYPE',
+            path: '$',
+            message: error instanceof Error ? error.message : String(error)
+        };
+    }
+}
+
+// P5b deferred (verify/session/delta/agency): 1.x keeps the full protocol v2
+// validators (`validateSaveVerificationRequestV2`,
+// `validateSaveVerificationResponseV2`) plus the session/delta/telemetry
+// surfaces in `saveFactVerificationSchemas.ts`. That file is not ported to
+// 2CE and the verification/session ops are deferred, so those re-exports
+// (and the only consumers, the agency-facing client op paths) stay removed.
+// The capabilities whitelist above is the one piece ported early so binary
+// (melt) save support reporting has a strict contract on the 2CE side.

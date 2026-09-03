@@ -68,7 +68,9 @@ fn zip_local_header_far_from_offset_zero_still_located() {
 }
 
 #[test]
-fn zip_with_binary_header_degrades_to_unsupported() {
+fn zip_with_garbage_binary_gamestate_is_rejected_by_melt_gate() {
+    // 语义变化（binary melt 接入后）：binary 不再是「识别即 unsupported」，
+    // 而是版本门禁 → melt。垃圾二进制内容在门禁阶段判损坏，绝不能误解析。
     let dir = TempDir::new("zip-binary");
     let zip = build_zip(&[ZipEntrySpec {
         name: b"gamestate",
@@ -79,18 +81,19 @@ fn zip_with_binary_header_degrades_to_unsupported() {
     let path = write_file(dir.path(), "zip_binary.ck3", &save);
 
     let (_out, v) = probe_json(&path, dir.path());
-    expect_error_code(&v, "unsupported", "SAVE_TOKEN_RESOLVER_MISSING");
+    expect_error_code(&v, "invalid", "SAVE_PARSE_FAILED");
     assert_eq!(v["manifest"]["sourceFormat"], "zip_binary");
     assert!(v.get("identity").is_none());
 }
 
 #[test]
-fn binary_marker_fixture_degrades_to_unsupported() {
+fn binary_marker_fixture_is_rejected_by_melt_gate() {
+    // 同上：SAV0101 + 垃圾二进制内容 → melt 门禁损坏，不误解析。
     let (_out, v) = probe_json(
         &fixtures_dir().join("binary_marker_minimal.ck3"),
         &fixtures_dir(),
     );
-    expect_error_code(&v, "unsupported", "SAVE_TOKEN_RESOLVER_MISSING");
+    expect_error_code(&v, "invalid", "SAVE_PARSE_FAILED");
     assert_eq!(v["manifest"]["sourceFormat"], "unified_binary");
     assert!(v.get("identity").is_none());
 }

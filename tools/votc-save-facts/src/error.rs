@@ -19,6 +19,9 @@ pub enum ErrorCode {
     SaveEntryMissing,
     SaveBinaryUnsupported,
     SaveTokenResolverMissing,
+    /// 二进制存档的 meta version 与内置 token 表版本不一致（token 随版本
+    /// 漂移，跨版本解析会静默错位，按 unsupported 拒绝）。
+    SaveTokenVersionMismatch,
     SaveVersionUnsupported,
     SaveParseFailed,
     SaveLimitExceeded,
@@ -70,6 +73,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ErrorCode::ParserCrashed).unwrap(),
             "\"PARSER_CRASHED\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ErrorCode::SaveTokenVersionMismatch).unwrap(),
+            "\"SAVE_TOKEN_VERSION_MISMATCH\""
         );
         assert_eq!(
             serde_json::to_string(&ErrorCode::RequestInvalid).unwrap(),

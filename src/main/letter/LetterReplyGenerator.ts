@@ -32,6 +32,10 @@ import { chronicleMemoryStorePath } from '../campaignDataPaths.js';
 import { reportCampaignIdentityUnavailable, reportCorruptTimelineRegistry, reportTimelineParentNotFound, reportUnsupportedTimelineSchema } from '../timelineRegistryRecovery.js';
 import { runLetterReplyTimelineTransition } from '../timelineBusinessWire.js';
 import type { CampaignPlayerIdentity } from '../../shared/gameData/CampaignIdentity.js';
+import type { Ck3GameDate } from '../../shared/gameData/gameDate.js';
+import { buildLetterHistoryRecord } from './letterHistoryRecord.js';
+import { saveOutgoingLetterHistoryRecord } from '../conversationHistory.js';
+import { resolveLetterTimelineContextFromGameData } from './letterTimelineContext.js';
 
 import { buildLetterFallbackPayload, buildLetterTimelineBlock } from './letterRunScript.js';
 
@@ -97,11 +101,14 @@ export class LetterReplyGenerator {
     // registry (campaign-scoped when the snapshot carries a v2 identity,
     // player-only legacy fallback otherwise) so summary reads filter
     // node-tagged records by branch instead of fail-closed hiding them.
-    private getSummaryTimeline(gameData: GameData): { registry: TimelineRegistry | undefined; currentNodeId: string | undefined } {
+    // F21 also exposes the campaign identity so the conversation-summary read
+    // in buildLetterPrompt can union the campaign namespace.
+    private getSummaryTimeline(gameData: GameData): { registry: TimelineRegistry | undefined; currentNodeId: string | undefined; identity?: CampaignPlayerIdentity } {
         const persistence = new FsTimelinePersistence(app.getPath('userData'));
         let registry: TimelineRegistry | undefined;
+        let identity: CampaignPlayerIdentity | undefined;
         try {
-            const identity = requireCampaignIdentity({
+            identity = requireCampaignIdentity({
                 playerID: gameData.playerID,
                 timelineSnapshotResult: gameData.timelineSnapshotResult
             });
@@ -109,6 +116,7 @@ export class LetterReplyGenerator {
             registry = result.status === 'found' ? result.store : undefined;
         } catch {
             // Legacy snapshot: fall back to player-only display load.
+            identity = undefined;
             registry = persistence.loadRegistry(String(gameData.playerID)) ?? undefined;
         }
         const context = registry
@@ -116,7 +124,8 @@ export class LetterReplyGenerator {
             : buildContextFromGameData(gameData);
         return {
             registry,
-            currentNodeId: context.timelineNodeId
+            currentNodeId: context.timelineNodeId,
+            identity
         };
     }
 
@@ -158,7 +167,15 @@ export class LetterReplyGenerator {
             // Pass the timeline registry so node-tagged summaries from the
             // current branch stay visible (without it they fail-closed hide).
             const summaryTimeline = this.getSummaryTimeline(gameData);
-            const summaries: Summary[] = await readSummaryFile(this.userDataPath, String(player.id), gameData.votcCheckpointEpoch, summaryTimeline.registry, summaryTimeline.currentNodeId);
+            // F21: union read across the campaign summary store (when an
+            // identity is available) and the legacy player store; dedup by
+            // summary id keeps the campaign copy authoritative.
+            const campaignSummaries: Summary[] = summaryTimeline.identity
+                ? await readSummaryFile(app.getPath('userData'), String(player.id), gameData.votcCheckpointEpoch, summaryTimeline.registry, summaryTimeline.currentNodeId, summaryTimeline.identity)
+                : [];
+            const legacySummaries = await readSummaryFile(this.userDataPath, String(player.id), gameData.votcCheckpointEpoch, summaryTimeline.registry, summaryTimeline.currentNodeId);
+            const seenSummaryIds = new Set(campaignSummaries.map(s => s.id));
+            const summaries: Summary[] = [...campaignSummaries, ...legacySummaries.filter(s => !s.id || !seenSummaryIds.has(s.id))];
             const aiSummaries = summaries.filter(summary => summary.characterId === String(ai.id)).slice(0, depth);
             
             if (aiSummaries.length > 0) {
@@ -180,7 +197,10 @@ export class LetterReplyGenerator {
         const letterManager = LetterManager.getInstance();
         // @ts-ignore
         const depth = this.config.summaries_insert_depth || 3;
-        const letterSummaries = letterManager.getLetterSummaries(String(player.id), String(ai.id), gameData.votcCheckpointEpoch).slice(0, depth);
+        // F21: pass the timeline context so reads/writes route into the
+        // campaign letter store and node-tagged summaries are branch-filtered.
+        const letterContext = resolveLetterTimelineContextFromGameData(gameData);
+        const letterSummaries = letterManager.getLetterSummaries(String(player.id), String(ai.id), gameData.votcCheckpointEpoch, letterContext).slice(0, depth);
         let letterSummaryContent = '';
         if (letterSummaries.length > 0) {
             const allSummaries = letterSummaries.map((summary, index) => 
@@ -267,6 +287,9 @@ export class LetterReplyGenerator {
             let timeline: CreateChildNodeResult | undefined;
             let timelineRunBlock: string | undefined;
             let snapshot: { slotId: string; deliveryId: number } | undefined;
+            // Captured for the T5 outgoing-letter history record; only the
+            // timeline (slot) path carries a resolvable campaign identity.
+            let recordIdentity: CampaignPlayerIdentity | undefined;
 
             if (slotId) {
                 // mod2 ce emits no per-delivery id; the sending game day is the
@@ -289,6 +312,7 @@ export class LetterReplyGenerator {
                     }
                     throw error;
                 }
+                recordIdentity = identity;
 
                 // P2 chronicle observation of the outgoing-letter snapshot
                 // (1.x LetterReplyGenerator.ts:492). Failure only marks the
@@ -429,12 +453,37 @@ export class LetterReplyGenerator {
 
             // Save letter history immediately
             console.log('[LetterReplyGenerator] Saving letter history...');
-            const replyLetter = await this.saveLetterHistory(String(letter.sender.id), String(letter.recipient.id), letter, escapedResponse, gameData, replyLetterId, timelineRunBlock);
+            const replyLetter = await this.saveLetterHistory(
+                String(letter.sender.id),
+                String(letter.recipient.id),
+                letter,
+                escapedResponse,
+                gameData,
+                replyLetterId,
+                timelineRunBlock,
+                timeline && recordIdentity && snapshot && gameData.gameDate
+                    ? {
+                        timeline,
+                        identity: recordIdentity,
+                        deliveryId: snapshot.deliveryId,
+                        // The canonical record keeps the human-readable text;
+                        // escapedResponse is CK3-payload escaping only.
+                        rawReply: response.trim(),
+                        gameDate: gameData.gameDate
+                    }
+                    : undefined
+            );
             console.log('[LetterReplyGenerator] Letter history saved.');
             
             // Update original letter status back to 'sent' since reply is now pending
             const letterManager = LetterManager.getInstance();
-            letterManager.updateLetterStatus(String(letter.sender.id), String(letter.recipient.id), letter.id, 'sent');
+            letterManager.updateLetterStatus(
+                String(letter.sender.id),
+                String(letter.recipient.id),
+                letter.id,
+                'sent',
+                resolveLetterTimelineContextFromGameData(gameData)
+            );
 
             // Return the generated reply so it can be queued for delayed delivery
             if (replyLetter) {
@@ -494,7 +543,22 @@ export class LetterReplyGenerator {
      * @param userFolderPath User folder path
      * @param gameData Game data (for character names)
      */
-    private async saveLetterHistory(playerId: string, aiId: string, originalLetter: ILetter, replyContent: string, gameData: GameData, replyLetterId: string, timelineRunBlock?: string): Promise<ILetter | null> {
+    private async saveLetterHistory(
+        playerId: string,
+        aiId: string,
+        originalLetter: ILetter,
+        replyContent: string,
+        gameData: GameData,
+        replyLetterId: string,
+        timelineRunBlock?: string,
+        recordContext?: {
+            timeline: CreateChildNodeResult;
+            identity: CampaignPlayerIdentity;
+            deliveryId: number;
+            rawReply: string;
+            gameDate: Ck3GameDate;
+        }
+    ): Promise<ILetter | null> {
         try {
             const letterManager = LetterManager.getInstance();
     
@@ -536,20 +600,25 @@ export class LetterReplyGenerator {
                 expectedPlayerDeliveryDate // When the player should receive it
             );
             replyLetter.votcCheckpointEpoch = gameData.votcCheckpointEpoch;
+            // F21: full lineage stamps. The timeline transition context is the
+            // authoritative source; degraded flows keep epoch-only stamps.
+            replyLetter.votcCampaignId = recordContext?.identity.campaignId ?? replyLetter.votcCampaignId;
+            replyLetter.votcTimelineNodeId = recordContext?.timeline.nodeId ?? replyLetter.votcTimelineNodeId;
+            replyLetter.votcTimelineParentId = recordContext?.timeline.parentId ?? replyLetter.votcTimelineParentId;
             // Persist the guarded timeline commit block with the reply so the
             // delayed delivery (and rehydrated deliveries after an app
             // restart) can still write the letter's node back to the save.
             replyLetter.timelineRunBlock = timelineRunBlock;
-    
-            // Atomically update the history file
+
+            // F21: the thread store (union of the campaign store and the
+            // legacy flat store) is read and merged through LetterManager so
+            // the write lands in the campaign namespace when the identity is
+            // available, or in the legacy location in degraded mode.
+            const letterContext = resolveLetterTimelineContextFromGameData(gameData);
             const otherCharacterId = aiId; // The file is named after the non-player character
-            const filePath = letterManager.getLetterFilePath(playerId, otherCharacterId);
-    
-            let history: ILetter[] = [];
-            if (fs.existsSync(filePath)) {
-                history = letterManager.getLetters(playerId, otherCharacterId);
-            }
-    
+
+            let history: ILetter[] = letterManager.getLetters(playerId, otherCharacterId, undefined, letterContext);
+
             // Add original letter if not present (using a more robust duplicate check)
             const isOriginalDuplicate = history.some(l =>
                 l.subject === originalLetter.subject &&
@@ -565,13 +634,42 @@ export class LetterReplyGenerator {
             if (!history.some(l => l.id === replyLetter.id)) {
                 history.push(replyLetter);
             }
-            
+
             history.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    
-            fs.writeFileSync(filePath, JSON.stringify(history, null, 2), 'utf8');
-            
+
+            letterManager.saveLetterThread(playerId, otherCharacterId, history, letterContext);
+
             console.log(`Saved original letter and AI reply to letter history for player ${playerId} and character ${aiId}`);
-    
+
+            // Plan task T5 wiring: mirror the thread into the campaign-scoped
+            // timeline letter history so the history viewer's letter tab can
+            // surface it. Best-effort by design — a record failure must never
+            // affect the letter delivery itself.
+            if (recordContext) {
+                try {
+                    const record = buildLetterHistoryRecord({
+                        letterId: originalLetter.id,
+                        deliveryId: recordContext.deliveryId,
+                        playerLetter: originalLetter.content,
+                        aiReply: recordContext.rawReply,
+                        checkpointEpoch: recordContext.timeline.context.checkpointEpoch ?? gameData.votcCheckpointEpoch + 1,
+                        timeline: recordContext.timeline,
+                        identity: recordContext.identity,
+                        sourceRecordId: randomUUID(),
+                        gameDate: recordContext.gameDate,
+                        senderId: playerId,
+                        receiverId: aiId,
+                        playerName: player?.shortName ?? playerId,
+                        aiName: ai?.shortName ?? aiId,
+                        senderCharacter: player,
+                        receiverCharacter: ai
+                    });
+                    await saveOutgoingLetterHistoryRecord(record, recordContext.identity);
+                } catch (error) {
+                    console.error(`[LetterReplyGenerator] Outgoing letter history record failed (delivery continues): ${error}`);
+                }
+            }
+
             return replyLetter;
         } catch (error) {
             console.error(`Error saving letter history: ${error}`);
@@ -628,21 +726,29 @@ export class LetterReplyGenerator {
             const playerId = String(originalLetter.sender.id);
             const aiId = String(originalLetter.recipient.id);
 
+            // F21: route the summary into the campaign letter store (stamped
+            // with campaignId / nodeId / epoch) when the identity is
+            // available; degraded sessions keep the legacy flat store.
+            const letterContext = resolveLetterTimelineContextFromGameData(gameData);
+
             const newSummary: LetterSummary = {
                 id: randomUUID(),
                 date: letterDate,
                 summary: summaryContent.trim(),
                 letterIds: [originalLetter.id, replyLetterId],
-                votcCheckpointEpoch: gameData.votcCheckpointEpoch
+                votcCheckpointEpoch: gameData.votcCheckpointEpoch,
+                ...(letterContext.identity ? { votcCampaignId: letterContext.identity.campaignId } : {}),
+                ...(letterContext.currentNodeId ? { votcTimelineNodeId: letterContext.currentNodeId } : {}),
+                ...(letterContext.currentParentNodeId ? { votcTimelineParentId: letterContext.currentParentNodeId } : {})
             };
-    
+
             const letterManager = LetterManager.getInstance();
-            const existingSummaries = letterManager.getLetterSummaries(playerId, aiId);
-            
+            const existingSummaries = letterManager.getLetterSummaries(playerId, aiId, gameData.votcCheckpointEpoch, letterContext);
+
             // Add new summary to the beginning of the list
             existingSummaries.unshift(newSummary);
-    
-            letterManager.saveLetterSummaries(playerId, aiId, existingSummaries);
+
+            letterManager.saveLetterSummaries(playerId, aiId, existingSummaries, letterContext);
             console.log(`Letter summary saved for AI ID ${aiId}`);
 
         } catch (error) {

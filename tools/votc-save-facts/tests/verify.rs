@@ -166,6 +166,42 @@ fn verify_evaluates_closed_allowlist_with_known_true_and_false() {
 }
 
 #[test]
+fn verify_parses_block_form_gold_from_real_119_saves() {
+    // 回归：真实 1.19 存档把 alive_data.gold 序列化为 { value=<decimal> } 块
+    // 且可为负（负债）；此前按标量解析，整个角色扫描以 PARTIAL_PARSE 失败。
+    let dir = common::TempDir::new("verify-gold-block");
+    let living = common::living_block(&format!(
+        "{}{}{}",
+        common::char_entry("1001", "\t\talive_data={}\n"),
+        common::char_entry(
+            "1002",
+            concat!(
+                "\t\tskill={ 7 4 10 5 5 1 }\n",
+                "\t\talive_data={ gold={ value=8334.96735 } }\n",
+            ),
+        ),
+        common::char_entry("1003", "\t\talive_data={ gold={ value=-37.8125 } }\n"),
+    ));
+    let input = write_body(&dir, "verify-gold-block.ck3", &verification_body(&living));
+    let source_fingerprint = fingerprint(&input, dir.path());
+    let checks = serde_json::json!([
+        { "checkId": "life", "kind": "character_life_state", "characterId": "1002" },
+        { "checkId": "skill", "kind": "character_skill_at_least", "characterId": "1002", "skill": "diplomacy", "value": 1 },
+        { "checkId": "gold_true", "kind": "character_gold_at_least", "characterId": "1002", "value": 0 },
+        { "checkId": "gold_false", "kind": "character_gold_at_least", "characterId": "1002", "value": 8335 },
+        { "checkId": "gold_negative", "kind": "character_gold_at_least", "characterId": "1003", "value": 0 }
+    ]);
+    let (_, response) = run_verify(&input, dir.path(), &request(&source_fingerprint, checks));
+
+    assert_eq!(response["status"], "ok", "response: {response}");
+    assert_eq!(result(&response, "life")["lifeState"], "living");
+    assert_eq!(result(&response, "skill")["value"], true);
+    assert_eq!(result(&response, "gold_true")["value"], true);
+    assert_eq!(result(&response, "gold_false")["value"], false);
+    assert_eq!(result(&response, "gold_negative")["value"], false);
+}
+
+#[test]
 fn verify_distinguishes_dead_not_found_and_missing_field() {
     let dir = common::TempDir::new("verify-unknowns");
     let input = rich_character_save(&dir);

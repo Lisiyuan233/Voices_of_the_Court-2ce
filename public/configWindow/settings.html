@@ -212,7 +212,7 @@
             <div class="row">
               <div class="column">
                 <config-number confID="chronicleRawSourceCharLimit" min="5000" max="100000" step="1000" data-i18n="settings.chronicleRawSourceCharLimit"></config-number>
-                <tooltip-text side="top" data-i18n="settings.chronicleRawSourceCharLimit_tooltip">Maximum total characters of raw source material sent to the model.</tooltip-text>
+                <tooltip-text side="top" data-i18n="settings.chronicleRawSourceCharLimit_tooltip">Maximum total characters of raw source material sent to the model. Sources exceeding this limit are summarized.</tooltip-text>
               </div>
               <div class="column">
                 <config-number confID="chronicleOutputMaxTokens" min="100" max="4000" step="100" data-i18n="settings.chronicleOutputMaxTokens"></config-number>
@@ -235,7 +235,7 @@
             <div class="row">
               <div class="column">
                 <config-checkbox confID="saveFacts.enabled" data-i18n="settings.saveFactsParsing"></config-checkbox>
-                <tooltip-text side="top" data-i18n="settings.saveFactsParsing_tooltip">Read a structured snapshot of your save game (family, realm, wars, court) and use it as verified facts. Requires launching the game with -debug_mode; when off, the app never touches save files.</tooltip-text>
+                <tooltip-text side="top" data-i18n="settings.saveFactsParsing_tooltip">Read a structured snapshot of your save game (family, realm, wars, court) and use it as verified facts. Debug-mode saves are plain text; normal-mode saves are binary and parsed via melt (requires a CK3 version covered by the built-in token table). When off, the app never touches save files.</tooltip-text>
               </div>
               <div class="column">
                 <config-checkbox confID="saveFacts.parserEnabled" data-i18n="settings.saveFactsParser"></config-checkbox>

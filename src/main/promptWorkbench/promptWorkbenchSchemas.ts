@@ -267,11 +267,33 @@ function validateMessages(value: unknown, path: string): Message[] {
 
 function validateSecret(value: unknown, path: string): Secret {
     const obj = reqObject(value, path);
-    return {
+    const secret: Secret = {
         name: reqString(obj, 'name', path),
         desc: reqString(obj, 'desc', path),
-        category: reqString(obj, 'category', path)
+        category: reqString(obj, 'category', path),
+        // type/otherKnowers became required when owned secrets gained their
+        // sub-block protocol (F5); older persisted snapshots may omit them.
+        type: optString(obj, 'type', path) ?? '',
+        otherKnowers: []
     };
+    if (obj.targetId !== undefined) secret.targetId = optNumber(obj, 'targetId', `${path}.targetId`);
+    if (obj.targetName !== undefined) secret.targetName = optString(obj, 'targetName', `${path}.targetName`);
+    if (obj.isCriminal !== undefined) secret.isCriminal = optBoolean(obj, 'isCriminal', `${path}.isCriminal`);
+    if (obj.isShunned !== undefined) secret.isShunned = optBoolean(obj, 'isShunned', `${path}.isShunned`);
+    if (obj.spent !== undefined) secret.spent = optBoolean(obj, 'spent', `${path}.spent`);
+    if (obj.canBeExposed !== undefined) secret.canBeExposed = optBoolean(obj, 'canBeExposed', `${path}.canBeExposed`);
+    if (obj.otherKnowers !== undefined) {
+        const knowers = reqArray(obj, 'otherKnowers', path);
+        for (let i = 0; i < knowers.length; i++) {
+            const knowerPath = `${path}.otherKnowers[${i}]`;
+            const knower = reqObject(knowers[i], knowerPath);
+            secret.otherKnowers.push({
+                id: optNumber(knower, 'id', knowerPath) ?? 0,
+                name: optString(knower, 'name', knowerPath) ?? ''
+            });
+        }
+    }
+    return secret;
 }
 
 function validateOwnedSecret(value: unknown, path: string): OwnedSecret {

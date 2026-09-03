@@ -1,0 +1,17 @@
+[package]
+name = "token-resolver-builder"
+version = "0.1.0"
+edition = "2021"
+description = "Builds a CK3 16bit token -> field name resolver table by structurally aligning paired binary/plaintext saves"
+publish = false
+
+# 依赖白名单：jomini（envelope 解包 + binary lexer + text tape + deserializer
+# 验证，版本与 votc-save-facts 保持一致）、serde/serde_json（JSON 产物）。
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jomini = { version = "0.35", default-features = false, features = ["envelope", "derive"] }
+
+[[bin]]
+name = "token-resolver-builder"
+path = "src/main.rs"

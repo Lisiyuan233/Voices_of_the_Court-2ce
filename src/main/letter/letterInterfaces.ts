@@ -27,6 +27,15 @@ export interface Letter {
   isPlayerSender?: boolean;
   votcCheckpointEpoch?: number;
   /**
+   * Timeline lineage stamps (F21). Written by LetterManager when a campaign
+   * identity is available; legacy records (degraded writes / pre-campaign
+   * data) only carry votcCheckpointEpoch and fall back to epoch-based
+   * visibility filtering.
+   */
+  votcCampaignId?: string;
+  votcTimelineNodeId?: string;
+  votcTimelineParentId?: string;
+  /**
    * Guarded CK3 timeline commit block (buildLetterTimelineBlock output) for
    * this reply, built at generation time and persisted with the letter
    * history so a delivery after an app restart still carries it. Spliced
@@ -58,4 +67,8 @@ export interface LetterSummary {
   summary: string;
   letterIds: string[]; // To track which letters this summary covers
   votcCheckpointEpoch?: number;
+  /** Timeline lineage stamps (F21), see Letter. */
+  votcCampaignId?: string;
+  votcTimelineNodeId?: string;
+  votcTimelineParentId?: string;
 }

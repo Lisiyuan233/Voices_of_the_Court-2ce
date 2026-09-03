@@ -27,3 +27,10 @@ VOTC:IN/;/k_secret_spent/;/2000/;/no
 VOTC:IN/;/k_secret_can_be_exposed/;/2000/;/yes
 VOTC:IN/;/k_secret_knower/;/2000/;/Murdered Father/;/4000/;/Bishop Curious
 VOTC:IN/;/k_secret_eob/;/2000/;/
+VOTC:IN/;/secret/;/2000/;/Hidden Lover/;/Duke AI keeps a secret lover at court./;/Sexual/;/secret_lover
+VOTC:IN/;/secret_is_shunned/;/2000/;/
+VOTC:IN/;/secret_target/;/2000/;/Hidden Lover/;/3001/;/Lady Secret
+VOTC:IN/;/secret_knower/;/2000/;/Hidden Lover/;/4000/;/Bishop Curious
+VOTC:IN/;/secret_spent/;/2000/;/yes
+VOTC:IN/;/secret_can_be_exposed/;/2000/;/no
+VOTC:IN/;/secret_eob/;/2000/;/

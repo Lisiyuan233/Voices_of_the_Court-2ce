@@ -17,7 +17,8 @@ import {
     classifyLetterHistoryArray,
     type ClassifiedHistoryArray
 } from './history/HistoryRecordReaders.js';
-import type { IncomingLetterHistoryRecordV1 } from './history/historyRecordTypes.js';
+import type { IncomingLetterHistoryRecordV1, LetterHistoryRecordV1 } from './history/historyRecordTypes.js';
+import { isSameOutgoingLetterDelivery } from './letter/letterHistoryRecord.js';
 
 export type ArchiveHistoryEntry = {
     id: string;
@@ -76,9 +77,13 @@ function letterHistoryDirFor(playerId: string, identity?: CampaignPlayerIdentity
     // migration (1.x commits 884b29ec -> 1270eb20/92858374) and is kept as a
     // read-only fallback for data written before campaign identities existed;
     // new writes go through the campaign branch below once the Task 5 letter
-    // writer wiring lands. Unrelated to LetterManager chat letters, which live
-    // at `votc_data/letter_history/<playerId>/<characterId>.json` and are a
-    // separate feature never surfaced in this archive view.
+    // writer wiring lands. Unrelated to the F21 LetterManager chat-letter
+    // store (`letters/threads/` under the campaign player dir, with the
+    // legacy `votc_data/letter_history/<playerId>/` flat layout as its
+    // degraded fallback) — a separate feature never surfaced in this archive
+    // view. Note the two stores coexist under `letter_history/` without
+    // colliding because LetterManager player dirs are numeric while this
+    // archive uses the `player_` prefix.
     const userDataPath = app.getPath('userData');
     return identity
         ? campaignLetterHistoryDir(userDataPath, identity)
@@ -202,6 +207,13 @@ export async function listPromptTranscriptFiles(playerId: string, currentCharact
 
                 const timestamp = nameParts.pop(); // Remove and check timestamp
                 if (isNaN(Number(timestamp))) return false;
+
+                // Strip a trailing timeline-node segment (`_tl_<a>-<b>`, added
+                // by the close flow for graph-branch visibility) so epoch and
+                // character-id parsing below see the legacy name shape.
+                if (nameParts.length >= 2 && nameParts[nameParts.length - 2] === 'tl') {
+                    nameParts.splice(nameParts.length - 2, 2);
+                }
 
                 // Handle _ckptN_ segment
                 let fileEpoch: number | undefined;
@@ -686,4 +698,42 @@ export async function saveIncomingLetterHistory(record: IncomingLetterHistoryRec
         }
     );
     console.log(`Incoming letter history saved: ${historyFilePath}`);
+}
+
+/**
+ * Persists a schema v1 outgoing-letter record (plan task T5 wiring): the
+ * player's letter and the AI reply are stored as one timeline-anchored
+ * record in the campaign-scoped letter-history layout so the history
+ * viewer's letter tab can surface chat-letter threads. LetterManager's
+ * legacy thread files (`votc_data/letter_history/<pid>/<charId>.json`)
+ * remain the chat UI's source of truth and are never read here. Fail-closed
+ * on a corrupt existing file; idempotent per letterId + deliveryId + timeline
+ * node. Errors propagate to the caller, which must keep the letter delivery
+ * itself unaffected.
+ */
+export async function saveOutgoingLetterHistoryRecord(record: LetterHistoryRecordV1, identity: CampaignPlayerIdentity): Promise<void> {
+    const historyDir = campaignLetterHistoryDir(app.getPath('userData'), identity);
+    fs.mkdirSync(historyDir, { recursive: true });
+
+    // The file is named after the non-player character, mirroring the
+    // incoming-letter layout (`character_<senderId>.json`) so both record
+    // kinds for one correspondent share a file; the classifiers split them.
+    const historyFilePath = path.join(historyDir, `character_${record.receiverId}.json`);
+    await updateJsonArrayAtomic<unknown>(
+        historyFilePath,
+        (value) => {
+            if (!Array.isArray(value)) {
+                throw new Error('existing outgoing letter history file is not an array');
+            }
+            return value;
+        },
+        (records) => {
+            if (records.some(existing => isSameOutgoingLetterDelivery(existing, record))) {
+                console.log(`Outgoing letter history already present, skipping write: ${record.letterId}`);
+                return records;
+            }
+            return [...records, record];
+        }
+    );
+    console.log(`Outgoing letter history saved: ${historyFilePath}`);
 }

@@ -1,5 +1,26 @@
 import {Memory, Trait, OpinionModifier, Secret, Relative, StressInfo, LegitimacyInfo, MaaRegiment, KnownSecret, CharacterModifier, PersonaNumbers, OwnedSecret, CharacterScheme, ExposedTargetingScheme} from "./GameData"
-import { removeTooltip } from "./parseLog";
+import { removeTooltip } from "./ck3Text";
+
+/**
+ * Aggregate per-prompt-build token budget shared by every extended-facts
+ * render of one scene (chars/4 heuristic, same as the per-character budget).
+ * The description scripts (pListMcc*.js) render the AI first and then every
+ * other character with an independent 600-token cap each, which reaches
+ * ~10k tokens in 17-character scenes; this scene-level cap bounds the total.
+ * The main-process prompt builders reset the shared state through
+ * GameData.resetExtendedFactsSceneBudget before each description-script run.
+ */
+export const EXTENDED_FACTS_SCENE_TOKEN_BUDGET = 4000;
+
+/**
+ * Marker emitted instead of a character's extended facts once the scene
+ * budget is spent. English key-value style, consistent with the other
+ * truncation hints ("…+N more").
+ */
+export const EXTENDED_FACTS_SCENE_BUDGET_EXHAUSTED_MARKER = '[extended facts omitted: scene budget exhausted]';
+
+/** Mutable remaining-token state shared by one prompt build, owned by GameData. */
+export type SceneFactsBudgetState = { remainingTokens: number };
 
 /** @class */
 export class Character {
@@ -65,6 +86,13 @@ export class Character {
     modifiers: CharacterModifier[];
     knownSecrets: KnownSecret[];
     personaNumbers?: PersonaNumbers;
+    /**
+     * @internal Shared per-build scene budget state, attached non-enumerably
+     * by the owning GameData (see GameData.attachSceneFactsBudget). Undefined
+     * for standalone instances, which keeps the plain per-character budget
+     * behavior. Never serialized: non-enumerable and not cloned over IPC.
+     */
+    sceneFactsBudget?: SceneFactsBudgetState;
     // TODO: Use a proper Summary type once it's available in a shared location.
     conversationSummaries: any[];
 
@@ -277,8 +305,54 @@ export class Character {
      * Compact, prompt-ready rendering of P0 extended facts.
      * Token budget uses the chars/4 heuristic (same as calculateTokensFromText fallback).
      * Sections are added in priority order; once the budget is hit, remaining sections are dropped.
+     *
+     * When the character is attached to a GameData, rendering also draws from
+     * the shared per-prompt-build scene budget (EXTENDED_FACTS_SCENE_TOKEN_BUDGET):
+     * each call is charged in invocation order (the description scripts render
+     * the AI first, then the other characters). Grants are all-or-nothing per
+     * character — a character is either rendered whole under its own `maxTokens`
+     * cap, or omitted entirely with EXTENDED_FACTS_SCENE_BUDGET_EXHAUSTED_MARKER
+     * once the scene budget can no longer fit it. Standalone characters (no
+     * budget attached) keep the plain per-character behavior.
      */
     getExtendedFactsDescription(maxTokens: number = 600): string {
+        const sections = this.getExtendedFactSections();
+        const render = (cap: number): { text: string; usedTokens: number } => {
+            let output = "";
+            let usedTokens = 0;
+            for (const section of sections) {
+                const cost = Math.ceil(section.length / 4) + 1; // +1 for newline
+                if (usedTokens + cost > cap) break;
+                output += (output ? "\n" : "") + section;
+                usedTokens += cost;
+            }
+            return { text: output.trim(), usedTokens };
+        };
+
+        const budget = this.sceneFactsBudget;
+        if (!budget) return render(maxTokens).text;
+
+        if (sections.length === 0) return "";
+        if (budget.remainingTokens <= 0) return EXTENDED_FACTS_SCENE_BUDGET_EXHAUSTED_MARKER;
+
+        const full = render(maxTokens);
+        if (!full.text) return ""; // caller-provided cap too small for any section
+
+        if (full.usedTokens > budget.remainingTokens) {
+            // The scene budget can no longer fit this character's facts: omit
+            // them entirely and close the budget so every following character
+            // gets the explicit omission marker too.
+            budget.remainingTokens = 0;
+            return EXTENDED_FACTS_SCENE_BUDGET_EXHAUSTED_MARKER;
+        }
+        budget.remainingTokens -= full.usedTokens;
+        return full.text;
+    }
+
+    /**
+     * Priority-ordered extended-fact sections before any token budget is applied.
+     */
+    private getExtendedFactSections(): string[] {
         const trimText = (s: string | undefined, max = 240): string =>
             s && s.trim() ? s.trim().slice(0, max) : "";
         const isNum = (v: number | undefined): v is number =>
@@ -377,15 +451,7 @@ export class Character {
             sections.push(`Notable modifiers: ${shownModifiers.map(m => m.name).join(', ')}${modifierOverflow > 0 ? `, …+${modifierOverflow} more` : ''}`);
         }
 
-        let output = "";
-        let usedTokens = 0;
-        for (const section of sections) {
-            const cost = Math.ceil(section.length / 4) + 1; // +1 for newline
-            if (usedTokens + cost > maxTokens) break;
-            output += (output ? "\n" : "") + section;
-            usedTokens += cost;
-        }
-        return output.trim();
+        return sections;
     }
 
     static fromPlainObject(obj: any): Character {

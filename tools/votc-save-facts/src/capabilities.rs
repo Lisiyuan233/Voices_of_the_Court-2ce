@@ -25,6 +25,16 @@ pub struct SaveFactCapabilityV1 {
     pub protocol_version: u32,
 }
 
+/// binary 存档解析支持状态。App 端白名单已含 `binarySaveSupport`
+///（saveFactVerificationSchemas.ts），可以安全上报。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinarySaveSupportV1 {
+    pub status: CapabilitiesStatus,
+    /// 编译进二进制的 token 表覆盖的 CK3 游戏版本。
+    pub token_table_version: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveFactCapabilitiesResultV1 {
@@ -34,6 +44,8 @@ pub struct SaveFactCapabilitiesResultV1 {
     pub capabilities: Vec<SaveFactCapabilityV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parser_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binary_save_support: Option<BinarySaveSupportV1>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -87,6 +99,10 @@ pub fn supported_result() -> SaveFactCapabilitiesResultV1 {
             },
         ],
         parser_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        binary_save_support: Some(BinarySaveSupportV1 {
+            status: CapabilitiesStatus::Ok,
+            token_table_version: crate::tokens::TOKEN_TABLE_CK3_VERSION.to_string(),
+        }),
     }
 }
 
@@ -97,5 +113,6 @@ pub fn unsupported_result() -> SaveFactCapabilitiesResultV1 {
         status: CapabilitiesStatus::Unsupported,
         capabilities: Vec::new(),
         parser_version: None,
+        binary_save_support: None,
     }
 }

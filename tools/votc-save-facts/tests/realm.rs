@@ -41,6 +41,41 @@ fn realm_body() -> String {
 }
 
 #[test]
+fn ck3_1_19_nested_landed_titles_block_is_scanned() {
+    // 真实 1.19 存档把 title 记录嵌套在 landed_titles.landed_titles 第二层
+    // （第一层只有 dynamic_templates）；回归：此前第二层被整块跳过，realm
+    // 提取的 title 数据静默为空。
+    let dir = TempDir::new("realm-nested-titles");
+    let living = living_block(&char_entry(
+        "1001",
+        "\t\tfirst_name=\"Placeholder Alpha\"\n\t\talive_data={\n\t\t\tprimary_title=200\n\t\t}\n",
+    ));
+    let inner = format!(
+        "landed_titles={{\n{}}}\n",
+        title_entry(
+            "200",
+            "\t\tkey=d_placeholder\n\t\tholder=1001\n\t\tcolor=rgb { 71 3 1 }\n"
+        )
+    );
+    let titles = landed_titles_block(
+        &(String::from("\tdynamic_templates={ { key=\"x_mc_0\" tier=duchy dyn=yes } }\n") + &inner),
+    );
+    let body = gamestate_blocks(&default_vars(1), &(living + &titles));
+    let v = extract_on_body(
+        &dir,
+        "realm-nested.ck3",
+        &body,
+        &extract_request(&["1001"], &["realm"]),
+    );
+    assert_eq!(v["status"], "ok", "unexpected: {v}");
+    assert!(entity_ids(&v, "title").contains(&"200".to_string()));
+    let holders = facts_with(&v, "title.holder");
+    assert_eq!(holders.len(), 1);
+    assert_eq!(holders[0]["subject"]["id"], "200");
+    assert_eq!(holders[0]["object"]["id"], "1001");
+}
+
+#[test]
 fn full_realm_extraction() {
     let dir = TempDir::new("realm-full");
     let v = extract_on_body(

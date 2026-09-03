@@ -197,6 +197,20 @@ describe('military snapshot block parsing', () => {
         expect(snapshot!.complete).toBe(true);
         expect(snapshot!.wars.size).toBe(2);
         expect(snapshot!.armies).toHaveLength(2);
+        // The council event emits attendee lines between the block's init line
+        // and the snapshot header, so the tail scan must back its range up to
+        // that init line; the attendees must not be dropped on this path.
+        expect(snapshot!.attendees).toHaveLength(3);
+        const marshal = snapshot!.attendees.find(a => a.character.id === 2002)!;
+        expect(marshal).toBeDefined();
+        expect(marshal.roles).toEqual(['marshal']);
+        expect(marshal.canCommandPlayerArmies).toBe(true);
+        const knight = snapshot!.attendees.find(a => a.character.id === 2003)!;
+        expect(knight).toBeDefined();
+        expect(knight.roles).toEqual(['knight']);
+        const adviser = snapshot!.attendees.find(a => a.character.id === 2004)!;
+        expect(adviser).toBeDefined();
+        expect(adviser.canCommandPlayerArmies).toBe(false);
     });
 
     it('recovers the snapshot from a log whose tail exceeds 1 MB of multibyte content', async () => {

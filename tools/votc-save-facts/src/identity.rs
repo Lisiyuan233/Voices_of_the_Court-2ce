@@ -292,22 +292,33 @@ impl<R: Read> Scanner<R> {
     /// 跳过一个值（scalar/string 或一对平衡花括号）。
     pub(crate) fn skip_value(&mut self) -> Result<(), IdentityError> {
         match self.next_token()? {
-            Token::LBrace => {
-                let mut depth = 1u32;
-                while depth > 0 {
-                    match self.next_token()? {
-                        Token::LBrace => depth += 1,
-                        Token::RBrace => depth -= 1,
-                        Token::Eof => return Err(IdentityError::Truncated),
-                        _ => {}
-                    }
+            Token::LBrace => self.skip_block(),
+            Token::Scalar(_) | Token::Str(_) => {
+                // Clausewitz 复合值：scalar 后可直接跟一个块（真实 1.19 存档
+                // title 记录里的 color=rgb { 71 3 1 }），块属于该值，一并跳过。
+                if self.peek_token()? == &Token::LBrace {
+                    self.next_token()?;
+                    self.skip_block()?;
                 }
                 Ok(())
             }
-            Token::Scalar(_) | Token::Str(_) => Ok(()),
             // 值位置出现 = / } / EOF 都是结构损坏。
             _ => Err(IdentityError::ParseFailed),
         }
+    }
+
+    /// 跳过一对已消费 `{` 的平衡花括号块。
+    fn skip_block(&mut self) -> Result<(), IdentityError> {
+        let mut depth = 1u32;
+        while depth > 0 {
+            match self.next_token()? {
+                Token::LBrace => depth += 1,
+                Token::RBrace => depth -= 1,
+                Token::Eof => return Err(IdentityError::Truncated),
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn expect_eq(&mut self) -> Result<(), IdentityError> {

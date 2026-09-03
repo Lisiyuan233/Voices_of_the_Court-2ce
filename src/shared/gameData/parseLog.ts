@@ -1,7 +1,10 @@
 import { GameData, Memory, Trait, OpinionModifier, Secret, Relative, KnownSecret} from "./GameData";
 import { MilitarySnapshot, WarInfo, SiegeInfo, ArmyInfo, MilitaryAttendee, MilitaryAttendeeRole, WarSide } from "./GameData";
 import { Character } from "./Character";
+import { removeTooltip } from "./ck3Text";
 const fs = require('fs');
+
+export { removeTooltip } from "./ck3Text";
 
 export interface LogSnapshotRange {
     startOffset: number;
@@ -67,6 +70,10 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
     const deferredRelations: { charAID: number, charBID: number, relationship: string }[] = [];
 
     const pendingKnownSecrets = new Map<number, Partial<KnownSecret> & { otherKnowers: { id: number; name: string }[] }>();
+
+    // Owned-secret pending blocks (same state-machine shape as pendingKnownSecrets):
+    // the mod emits a `secret` base line, zero or more sub-lines, then `secret_eob`.
+    const pendingOwnedSecrets = new Map<number, Secret>();
 
     // P3 military snapshot accumulation state (block-scoped). Regiments follow
     // the most recent army line, mirroring 1.x GameDataRecordAccumulator.
@@ -271,6 +278,12 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
                 case "k_secret": {
                     if (!gameData) continue;
                     if (!gameData.characters.has(rootID)) break;
+                    if (pendingKnownSecrets.has(rootID)) {
+                        // The previous block never received its k_secret_eob
+                        // line; warn so the silent pending overwrite is visible,
+                        // then start the new block fresh.
+                        console.warn(`[parseLog] k_secret block for character ${rootID} started before the previous block's k_secret_eob; discarding incomplete pending secret "${pendingKnownSecrets.get(rootID)?.name ?? ''}".`);
+                    }
                     pendingKnownSecrets.set(rootID, {
                         name: data[1], desc: data[2], category: data[3], type: data[4],
                         otherKnowers: []
@@ -351,12 +364,72 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
                     gameData!.characters.get(rootID)!.memories.push(memory);
                     console.log(`Parsed memory for character ID ${rootID}: ${memory.desc}`);
                 break;
-                case "secret": 
+                case "secret":
                     if (!gameData) continue;
-                    let secret = parseSecret(data)
-                    gameData!.characters.get(rootID)!.secrets.push(secret);
-                    console.log(`Parsed secret for character ID ${rootID}: ${secret.name}`);
+                    if (!gameData.characters.has(rootID)) break;
+                    if (pendingOwnedSecrets.has(rootID)) {
+                        // Same missing-eob defense as k_secret above.
+                        console.warn(`[parseLog] secret block for character ${rootID} started before the previous block's secret_eob; discarding incomplete pending secret "${pendingOwnedSecrets.get(rootID)?.name ?? ''}".`);
+                    }
+                    // Owned-secret base line: data[1]=name, data[2]=desc,
+                    // data[3]=category, data[4]=secret type. The block commits
+                    // at secret_eob so the sub-lines can enrich it.
+                    pendingOwnedSecrets.set(rootID, parseSecret(data));
+                    console.log(`Parsed owned secret base line for character ID ${rootID}: ${data[1]}`);
                 break;
+                case "secret_is_criminal": {
+                    const p = pendingOwnedSecrets.get(rootID);
+                    if (p) p.isCriminal = true;
+                    break;
+                }
+                case "secret_is_shunned": {
+                    const p = pendingOwnedSecrets.get(rootID);
+                    if (p) p.isShunned = true;
+                    break;
+                }
+                case "secret_target": {
+                    // Emission: rootID(owner)/;/secretName/;/targetId/;/targetName
+                    const p = pendingOwnedSecrets.get(rootID);
+                    if (!p) break;
+                    p.targetId = Number(data[2]); p.targetName = data[3];
+                    break;
+                }
+                case "secret_knower": {
+                    // Emission: rootID(owner)/;/secretName/;/knowerId/;/knowerName
+                    const p = pendingOwnedSecrets.get(rootID);
+                    if (!p) break;
+                    p.otherKnowers.push({ id: Number(data[2]), name: data[3] });
+                    break;
+                }
+                case "secret_spent": {
+                    const p = pendingOwnedSecrets.get(rootID);
+                    if (p) p.spent = data[1] === 'yes';
+                    break;
+                }
+                case "secret_can_be_exposed": {
+                    const p = pendingOwnedSecrets.get(rootID);
+                    if (p) p.canBeExposed = data[1] === 'yes';
+                    break;
+                }
+                case "secret_eob": {
+                    const p = pendingOwnedSecrets.get(rootID);
+                    if (!p) break;
+                    const c = gameData?.characters.get(rootID);
+                    if (c) {
+                        c.secrets.push(p);
+                        // 1.x v1 snapshot-schema parity: owned secrets also land
+                        // in ownedSecrets (name/type/category/description).
+                        c.ownedSecrets.push({
+                            name: p.name,
+                            type: p.type,
+                            category: p.category,
+                            description: p.desc
+                        });
+                        console.log(`Parsed owned secret for character ID ${rootID}: ${p.name}`);
+                    }
+                    pendingOwnedSecrets.delete(rootID);
+                    break;
+                }
                 case "trait":
                     if (!gameData) continue;
                     const characterWithTrait = gameData.characters.get(rootID);
@@ -587,8 +660,12 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
                 }
                 case "war_participant": {
                     const snap = ensureMilitarySnapshot();
-                    const war = snap.wars.get(Number(data[1]));
-                    if (!war) break;
+                    const warId = Number(data[1]);
+                    const war = snap.wars.get(warId);
+                    if (!war) {
+                        console.warn(`War ${warId} not found when adding war_participant. Skipping.`);
+                        break;
+                    }
                     war.participants.push({
                         character: { id: Number(data[2]) || 0, name: data[3] ?? '' },
                         side: (data[4] === 'defender' ? 'defender' : 'attacker') as WarSide,
@@ -660,8 +737,12 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
                 }
                 case "army_regiment": {
                     const snap = ensureMilitarySnapshot();
-                    const army = snap.armies.find(a => a.id === (lastMilitaryArmyId ?? rootID));
-                    if (!army) break;
+                    const regimentArmyId = lastMilitaryArmyId ?? rootID;
+                    const army = snap.armies.find(a => a.id === regimentArmyId);
+                    if (!army) {
+                        console.warn(`Army ${regimentArmyId} not found when adding army_regiment. Skipping.`);
+                        break;
+                    }
                     army.regiments.push({
                         typeName: data[1] ?? '',
                         count: Number(data[2]) || 0,
@@ -835,6 +916,8 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
             name: data[1],
             desc: data[2],
             category: data[3],
+            type: data[4] ?? '',
+            otherKnowers: []
         }
     }
 
@@ -886,10 +969,15 @@ async function readLastRelevantBlock(filePath: string): Promise<string | undefin
  * Extracts the most recent complete military snapshot from anywhere in the
  * debug.log tail (military blocks live in military-council conversation
  * blocks, not necessarily in the block a caller just parsed). Locates the
- * last `VOTC:IN/;/military_snapshot/` line, bounds the block at the next
+ * last `VOTC:IN/;/military_snapshot/` line, then backs the scan range up to
+ * the nearest preceding `VOTC:IN/;/init` line start: the council event emits
+ * its `military_attendee` lines between the init line and the snapshot header
+ * (order pinned by militaryProtocolStatic.test.ts), so starting at the header
+ * itself would drop every attendee. The range is bounded at the next
  * `VOTC:IN/;/init` line (or EOF) and reuses the regular parser over that
- * snapshotRange. Returns undefined when the most recent snapshot block is
- * missing or incomplete (earlier blocks are not retried).
+ * snapshotRange. When no preceding init exists the range starts at the
+ * snapshot header, as before. Returns undefined when the most recent snapshot
+ * block is missing or incomplete (earlier blocks are not retried).
  *
  * All offsets are computed in whole-file STRING space (audit H2 fix): the
  * file is read once as UTF-8 and every index handed to parseLog comes from
@@ -905,7 +993,11 @@ export async function readLastMilitarySnapshotFromLog(debugLogPath: string): Pro
 
         const startIdx = content.lastIndexOf(START);
         if (startIdx === -1) return undefined;
-        const rangeStart = Math.max(0, content.lastIndexOf('\n', startIdx) + 1);
+        const headerStart = Math.max(0, content.lastIndexOf('\n', startIdx) + 1);
+        const blockInitIdx = content.lastIndexOf(END, startIdx);
+        const rangeStart = blockInitIdx === -1
+            ? headerStart
+            : Math.max(0, content.lastIndexOf('\n', blockInitIdx) + 1);
 
         let rangeEnd = content.length;
         const endIdx = content.indexOf(END, startIdx + START.length);
@@ -935,29 +1027,4 @@ export function extractMultilinePayload(element: string | undefined): string {
     const endIdx = element.lastIndexOf('#ENDMULTILINE');
     const payloadEnd = endIdx === -1 ? element.length : endIdx;
     return element.slice(payloadStart, payloadEnd).trim();
-}
-
-export function removeTooltip(str: string): string {
-    if (!str) return "";
-
-    // Remove unwanted ASCII control characters and tooltip/onclick prefixes
-    let cleanedStr = str.replace(/[\x15]/g, '')
-                      .replace(/\^U[^\n]*/g, '')
-                      .replace(/\b(?:ONCLICK|TOOLTIP):[A-Z_]+,[^\s)]+/g, '')
-                      .replace(/^\s*([A-Z][;\s]\s*)+/, '')
-                      .replace(/(?<![A-Za-z])L\s+/g, '')
-                      .replace(/(?<![A-Za-z])[A-Z];\s*/g, '');
-
-    // If a tooltip description marker ' L; ' exists, take the text after it
-    const lSemicolonIndex = cleanedStr.indexOf(' L; ');
-    if (lSemicolonIndex !== -1) {
-        cleanedStr = cleanedStr.substring(lSemicolonIndex + 4);
-    }
-
-    // Final cleanup on the resulting string
-    cleanedStr = cleanedStr.replace(/!+/g, '')
-      .replace(/[\s:!']+$/, '')
-      .trim();
-
-    return cleanedStr;
 }
