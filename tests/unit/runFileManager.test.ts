@@ -70,4 +70,14 @@ describe('RunFileManager 9003 dedup (F11)', () => {
         expect(existingIdx).toBeGreaterThan(newIdx);
         expect(triggerCount(content)).toBe(0);
     });
+
+    it('clear() leaves a BOM-only file so CK3 does not log an encoding warning', () => {
+        const manager = new RunFileManager(tmpDir);
+        manager.write('my_effect = yes');
+
+        manager.clear();
+
+        const raw = fs.readFileSync(runFile());
+        expect([...raw]).toEqual([0xEF, 0xBB, 0xBF]);
+    });
 });

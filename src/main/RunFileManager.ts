@@ -75,7 +75,7 @@ export class RunFileManager {
             return;
         }
         try {
-            fs.writeFileSync(this.path, "", 'utf-8');
+            fs.writeFileSync(this.path, UTF8_BOM);
             console.log("RunFileManager: Run file cleared.");
         } catch (error) {
             console.error(`RunFileManager: Failed to clear file ${this.path}:`, error);
