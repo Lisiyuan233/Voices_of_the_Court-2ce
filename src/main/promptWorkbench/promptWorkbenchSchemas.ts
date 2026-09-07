@@ -355,15 +355,22 @@ function validateMemory(value: unknown, path: string): Memory {
         type: reqString(obj, 'type', path),
         creationDate: reqString(obj, 'creationDate', path),
         desc: reqString(obj, 'desc', path),
-        relevanceWeight: reqNumber(obj, 'relevanceWeight', path),
-        participantIds: reqArray(obj, 'participantIds', path).map((item, i) => {
+        relevanceWeight: reqNumber(obj, 'relevanceWeight', path)
+    };
+    // 2CE's log-side memory lines carry no participant list (1.x did), so the
+    // Memory type marks participantIds/identityComplete optional; the incoming
+    // letter history path feeds such log-parsed memories through here.
+    if (obj.participantIds !== undefined) {
+        memory.participantIds = reqArray(obj, 'participantIds', path).map((item, i) => {
             if (typeof item !== 'number' || !Number.isFinite(item)) {
                 fail(`${path}.participantIds[${i}]`, 'expected a finite number');
             }
             return item;
-        }),
-        identityComplete: reqBoolean(obj, 'identityComplete', path)
-    };
+        });
+    }
+    if (obj.identityComplete !== undefined) {
+        memory.identityComplete = reqBoolean(obj, 'identityComplete', path);
+    }
     if (obj.creationGameDate !== undefined) {
         const check = validateCk3GameDate(obj.creationGameDate);
         if (!check.valid) fail(`${path}.creationGameDate`, check.reason);

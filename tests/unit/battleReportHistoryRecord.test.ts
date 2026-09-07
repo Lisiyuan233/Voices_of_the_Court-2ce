@@ -141,6 +141,25 @@ describe('buildBattleReportHistoryRecord (T7)', () => {
         expect(record.characters.every(c => /^[0-9a-f]{64}$|null/.test(String(c.snapshotHash)))).toBe(true);
     });
 
+    it('accepts log-parsed memories lacking participantIds/identityComplete (incoming-letter capture path)', () => {
+        // 2CE memory log lines carry no participant list, so parseLog produces
+        // memories with both fields undefined; the snapshot validator must
+        // match the Memory type (both optional) instead of requiring them.
+        const characters = makeCharacterMap();
+        (characters.get(1001) as { memories: unknown[] }).memories.push({
+            type: 'some_memory',
+            creationDate: '1067.5.14',
+            desc: 'Log-parsed memory without participant data',
+            relevanceWeight: 50
+        });
+        const record = buildBattleReportHistoryRecord(builderInput({
+            characterResolver: (characterId: number) => characters.get(characterId)
+        }));
+        const winner = record.characters.find(c => c.characterId === '1001');
+        expect(winner?.status).toBe('full');
+        expect(() => parseBattleReportHistoryRecord(record)).not.toThrow();
+    });
+
     it('merges roles when the winner is also the winning commander', () => {
         const record = buildBattleReportHistoryRecord(builderInput());
         const winner = record.characters.find(c => c.characterId === '1001');
