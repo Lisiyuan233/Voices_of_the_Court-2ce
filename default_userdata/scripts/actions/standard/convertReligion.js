@@ -6,7 +6,8 @@ module.exports = {
     args: [
         {
             name: "isWillinglyConverted",
-            type: "boolean",
+            type: "enum",
+            options: ["true", "false"],
             desc: { 
                 en: "required argument. Should be equal to (true) if {{character2Name}} converts willingly and to (false) if forcefully",
                 zh: "必需参数。如果{{character2Name}}自愿皈依，则应为(true)，如果强制皈依，则为(false)",
@@ -57,7 +58,11 @@ module.exports = {
      * @param {number} targetId
      */
     run: (gameData, runGameEffect, args, sourceId, targetId) => {
-		if (args[0]) { // if willingly
+		// 2CE only validates "number" args, and LLM arguments are raw strings:
+		// "false" is truthy, so compare explicitly instead of trusting truthiness.
+		const willing = String(args[0] ?? '').trim().toLowerCase() === 'true';
+
+		if (willing) { // if willingly
 			runGameEffect(`
 				random_list = {
 					10 = {
