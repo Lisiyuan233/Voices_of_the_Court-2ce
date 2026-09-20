@@ -63,7 +63,8 @@ export function writeLetterReplyFallbackRunFile(
     userFolderPath: string,
     slotId: string,
     deliveryId: number,
-    timelineBlock?: string
+    timelineBlock?: string,
+    campaignIdParts?: CampaignPlayerIdentity['campaignParts']
 ): boolean {
     const letterNumber = slotId.match(/^letter_([1-9])$/)?.[1];
     if (!letterNumber || !Number.isSafeInteger(deliveryId) || deliveryId < 0) return false;
@@ -73,7 +74,7 @@ export function writeLetterReplyFallbackRunFile(
     const filePath = path.join(runFolderPath, 'letters.txt');
     writeRunFileAtomically(
         filePath,
-        '\uFEFF' + buildLetterFallbackPayload({ letterNumber, deliveryId, timelineBlock })
+        '\uFEFF' + buildLetterFallbackPayload({ letterNumber, deliveryId, timelineBlock, campaignIdParts })
     );
     console.warn(`[LetterReply] Fallback payload written to letters.txt for ${slotId}/${deliveryId}${timelineBlock ? ' with timeline transition.' : ' without timeline transition.'}`);
     return true;
@@ -274,7 +275,7 @@ export class LetterReplyGenerator {
     public async generateLetterReply(gameData: GameData, letter: ILetter): Promise<ILetter | null> {
         // Hoisted so the catch-all failure exit can still route the fallback
         // payload for the timeline thread that was being generated.
-        let fallbackSnapshot: { slotId: string; deliveryId: number } | undefined;
+        let fallbackSnapshot: { slotId: string; deliveryId: number; campaignIdParts?: CampaignPlayerIdentity['campaignParts'] } | undefined;
         let fallbackTimelineRunBlock: string | undefined;
         try {
             console.log('[LetterReplyGenerator] Starting letter reply generation.');
@@ -286,7 +287,7 @@ export class LetterReplyGenerator {
             const slotId = /^letter_[1-9]$/.test(letter.subject) ? letter.subject : null;
             let timeline: CreateChildNodeResult | undefined;
             let timelineRunBlock: string | undefined;
-            let snapshot: { slotId: string; deliveryId: number } | undefined;
+            let snapshot: { slotId: string; deliveryId: number; campaignIdParts?: CampaignPlayerIdentity['campaignParts'] } | undefined;
             // Captured for the T5 outgoing-letter history record; only the
             // timeline (slot) path carries a resolvable campaign identity.
             let recordIdentity: CampaignPlayerIdentity | undefined;
@@ -313,6 +314,10 @@ export class LetterReplyGenerator {
                     throw error;
                 }
                 recordIdentity = identity;
+                // R2: stamp the delivery-instance snapshot with the campaign
+                // parts so the fallback payload (written on later failure)
+                // carries the whole-block campaign guard too.
+                snapshot.campaignIdParts = identity.campaignParts;
 
                 // P2 chronicle observation of the outgoing-letter snapshot
                 // (1.x LetterReplyGenerator.ts:492). Failure only marks the
@@ -520,7 +525,7 @@ export class LetterReplyGenerator {
      * cleared with the mod's clear-threads decision).
      */
     private writeLetterReplyFallbackPayload(
-        snapshot: { slotId: string; deliveryId: number } | undefined,
+        snapshot: { slotId: string; deliveryId: number; campaignIdParts?: CampaignPlayerIdentity['campaignParts'] } | undefined,
         timelineRunBlock: string | undefined
     ): void {
         if (!snapshot || !timelineRunBlock) return;
@@ -531,7 +536,7 @@ export class LetterReplyGenerator {
             console.warn('[LetterReplyGenerator] userFolderPath is not configured; fallback run payload was not written.');
             return;
         }
-        writeLetterReplyFallbackRunFile(this.config.userFolderPath, snapshot.slotId, snapshot.deliveryId, timelineRunBlock);
+        writeLetterReplyFallbackRunFile(this.config.userFolderPath, snapshot.slotId, snapshot.deliveryId, timelineRunBlock, snapshot.campaignIdParts);
     }
 
     /**

@@ -66,11 +66,22 @@ export async function parseLettersFromLog(debugLogPath: string, gameData: GameDa
             const dataString = line.substring(votcIndex + 'VOTC:LETTER'.length);
             const parts = dataString.split('/;/').slice(1);
 
-            if (parts.length >= 3) {
+            // The mod's letter-body line carries exactly four payload fields
+            // (content, letterId, writtenDay, delay) plus the trailing
+            // separator, while this app's own delivery diagnostics
+            // (timeline_applied / timeline_skipped_* / run_skipped) carry only
+            // three. Require the full body shape with numeric day/delay fields
+            // so diagnostic or truncated lines are never imported as bodies.
+            if (parts.length >= 4) {
                 const content = parts[0].trim();
                 const letterId = parts[1].trim(); // This is letterId, using as subject
-                const writtenDateInDays = parseInt(parts[2].trim());
-                const delay = parseInt(parts[3].trim(), 10) || 0;
+                const writtenDateInDays = parseInt(parts[2].trim(), 10);
+                const delay = parseInt(parts[3].trim(), 10);
+
+                if (!Number.isFinite(writtenDateInDays) || !Number.isFinite(delay)) {
+                    continue;
+                }
+
                 const senderIdFromLog = parts[4] ? parts[4].trim() : playerId;
                 const recipientIdFromLog = parts[5] ? parts[5].trim() : recipientId;
 

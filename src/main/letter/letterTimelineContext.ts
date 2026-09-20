@@ -8,6 +8,8 @@ import {
     type TimelineRegistry
 } from '../timelineManager.js';
 import type { CampaignPlayerIdentity } from '../../shared/gameData/CampaignIdentity.js';
+import { parseCampaignId } from '../../shared/gameData/CampaignIdentity.js';
+import type { Letter as ILetter } from './letterInterfaces.js';
 
 /**
  * Timeline v2 read/write context for the LetterManager letter store (F21).
@@ -82,4 +84,35 @@ export function resolveLetterTimelineContextFromGameData(gameData: GameDataLike)
         currentNodeId: resolvedNodeId ?? base.timelineNodeId,
         currentParentNodeId: resolvedParentId ?? base.timelineParentId
     };
+}
+
+/**
+ * R2/R5: rebuilds the routing context of a persisted letter record from its
+ * own lineage stamps. Used when a pending reply is re-queued after an app
+ * restart, so delivery gating and the LETTER_ACCEPTED confirmation address
+ * the campaign the reply belongs to instead of whatever conversation happens
+ * to be active. Deliberately minimal: registry / current-node resolution is
+ * not needed for store routing, and the record's node stamp is where the
+ * reply WAS written, not where the save is now.
+ */
+export function buildLetterContextFromRecord(record: Pick<ILetter, 'votcCampaignId' | 'votcCheckpointEpoch'>, playerId: string): LetterTimelineContext {
+    const context: LetterTimelineContext = {
+        checkpointEpoch: record.votcCheckpointEpoch
+    };
+    if (record.votcCampaignId) {
+        try {
+            const campaignParts = parseCampaignId(record.votcCampaignId);
+            const identity: CampaignPlayerIdentity = {
+                protocolSchema: 2,
+                campaignSchema: 1,
+                campaignId: record.votcCampaignId,
+                campaignParts,
+                playerId
+            };
+            context.identity = identity;
+        } catch (error) {
+            console.warn(`[letterTimelineContext] Could not rebuild campaign identity from "${record.votcCampaignId}"; degrading to epoch-only context: ${error}`);
+        }
+    }
+    return context;
 }

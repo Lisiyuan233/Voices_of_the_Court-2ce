@@ -19,6 +19,12 @@
  *     the `run_skipped` else branch and touches nothing. This also makes the
  *     2s poll repeat inert after the first execution (no duplicate artifacts
  *     or repeated message_event.362 triggers).
+ *   - Outer campaign guard `global_var:votc_campaign_id_a..d = <parts>`: the
+ *     payload embeds the campaign identity it was built for, and the WHOLE
+ *     delivery block (thread clear, artifact creation, message event — not
+ *     just the timeline write) only runs when the executing save still sits
+ *     in that campaign. A stale letters.txt polled after a campaign switch
+ *     fails here instead of consuming the new campaign's slot (R2).
  *   - Timeline guard `var:votc_checkpoint_epoch = <target>` (+ token when the
  *     mod preallocated one): the mod bumps the checkpoint at send time, so
  *     the save must still sit at the target epoch/token when the reply is
@@ -29,6 +35,8 @@
  *     skipped (`timeline_skipped_advanced`) instead of regressing the save
  *     onto a stale sibling branch; delivery still proceeds.
  */
+
+import type { CampaignIdParts } from '../../shared/gameData/CampaignIdentity.js';
 
 export interface LetterTimelineBlockInput {
     /** Slot number '1'..'9' (subject 'letter_N'). */
@@ -61,6 +69,23 @@ function indentCk3Block(block: string, indent: string): string {
 
 function isUsableCheckpointToken(token: number | undefined): token is number {
     return typeof token === 'number' && Number.isInteger(token) && token > 0;
+}
+
+/**
+ * R2: campaign identity lines for the outer block limit. Emitted only for a
+ * complete positive-integer part tuple — the guard compares in-save globals,
+ * so a partial tuple must not silently widen it.
+ */
+function campaignGuardLimitLines(parts: CampaignIdParts | undefined, indent: string): string[] {
+    if (!parts || !parts.a || !parts.b || !parts.c || !parts.d) {
+        return [];
+    }
+    return [
+        `${indent}global_var:votc_campaign_id_a = ${parts.a}`,
+        `${indent}global_var:votc_campaign_id_b = ${parts.b}`,
+        `${indent}global_var:votc_campaign_id_c = ${parts.c}`,
+        `${indent}global_var:votc_campaign_id_d = ${parts.d}`
+    ];
 }
 
 /**
@@ -100,6 +125,29 @@ export interface LetterDeliveryPayloadInput {
     escapedReply: string;
     /** Guarded timeline block from buildLetterTimelineBlock, when the reply carries one. */
     timelineBlock?: string;
+    /**
+     * R2: campaign id parts the payload was built for; emitted into the outer
+     * limit so a stale payload executed in another campaign is skipped whole.
+     */
+    campaignIdParts?: CampaignIdParts;
+}
+
+/**
+ * The outer block limit for the guarded payloads: the bare thread guard keeps
+ * its historical single-line form; with a campaign tuple the limit grows into
+ * a multi-line block so the whole delivery sits behind both guards (R2).
+ */
+function outerLimitLines(letterNumber: string, campaignIdParts: CampaignIdParts | undefined): string {
+    const campaignGuards = campaignGuardLimitLines(campaignIdParts, '\t\t');
+    if (campaignGuards.length === 0) {
+        return `\tlimit = { exists = global_var:votc_letter_${letterNumber} }`;
+    }
+    return [
+        '\tlimit = {',
+        `\t\texists = global_var:votc_letter_${letterNumber}`,
+        ...campaignGuards,
+        '\t}'
+    ].join('\n');
 }
 
 /**
@@ -114,7 +162,7 @@ export function buildLetterDeliveryPayload(input: LetterDeliveryPayloadInput): s
     const timeline = input.timelineBlock ? `${indentCk3Block(input.timelineBlock, '\t')}\n` : '';
     return `debug_log = "[Localize('talk_event.9999.desc')]"
 if = {
-\tlimit = { exists = global_var:votc_letter_${n} }
+${outerLimitLines(n, input.campaignIdParts)}
 ${timeline}\tremove_global_variable ?= votc_letter_${n}
 \tcreate_artifact = {
 \t\tname = votc_huixin_title${n}
@@ -179,6 +227,8 @@ export interface LetterFallbackPayloadInput {
     deliveryId: number;
     /** Guarded timeline block from buildLetterTimelineBlock, when the transition produced one. */
     timelineBlock?: string;
+    /** R2: campaign id parts for the outer delivery-block guard, see LetterDeliveryPayloadInput. */
+    campaignIdParts?: CampaignIdParts;
 }
 
 /**
@@ -192,7 +242,7 @@ export function buildLetterFallbackPayload(input: LetterFallbackPayloadInput): s
     const timeline = input.timelineBlock ? `${indentCk3Block(input.timelineBlock, '\t')}\n` : '';
     return `debug_log = "[Localize('talk_event.9999.desc')]"
 if = {
-\tlimit = { exists = global_var:votc_letter_${n} }
+${outerLimitLines(n, input.campaignIdParts)}
 ${timeline}\tsend_interface_message = {
 \t\ttype = votc_message_popup
 \t\ttitle = votc_huixin_title${n}

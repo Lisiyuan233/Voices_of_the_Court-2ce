@@ -372,12 +372,17 @@ export class LetterManager {
      * campaign happens to be active after a restart.
      */
     public getAllLettersAcrossCampaigns(playerId: string): ILetter[] {
-        const charFiles = new Map<string, string>(); // charId -> file
+        // R4: key candidate files by their full path, not by character id —
+        // the same player/character pair can have a thread file in the legacy
+        // store AND in several campaign stores, and a character-keyed map
+        // let later directories shadow earlier ones so only the last file
+        // was ever read.
+        const threadFiles = new Set<string>();
         const legacyDir = this.legacyThreadsDirFor(playerId);
         if (fs.existsSync(legacyDir)) {
             for (const file of fs.readdirSync(legacyDir)) {
                 if (file.endsWith('.json')) {
-                    charFiles.set(file.replace('.json', ''), path.join(legacyDir, file));
+                    threadFiles.add(path.join(legacyDir, file));
                 }
             }
         }
@@ -390,7 +395,7 @@ export class LetterManager {
                 }
                 for (const file of fs.readdirSync(campaignDir)) {
                     if (file.endsWith('.json')) {
-                        charFiles.set(file.replace('.json', ''), path.join(campaignDir, file));
+                        threadFiles.add(path.join(campaignDir, file));
                     }
                 }
             }
@@ -398,7 +403,7 @@ export class LetterManager {
 
         const seen = new Set<string>();
         const allLetters: ILetter[] = [];
-        for (const [, filePath] of charFiles) {
+        for (const filePath of threadFiles) {
             for (const letter of this.loadLetterFile(filePath)) {
                 const key = this.threadRecordKey(letter);
                 if (seen.has(key)) {
@@ -655,6 +660,10 @@ export class LetterManager {
         }, ctx);
         if (updated) {
             console.log(`Marked letter ${letterId} as delivered on ${deliveryDate}.`);
+        } else {
+            // R5: a silent miss here left the disk record at delivered:false
+            // while the game had already accepted the letter.
+            console.warn(`markAsDelivered: letter ${letterId} not found for player ${playerId}, character ${characterId} in the addressed stores.`);
         }
     }
 
@@ -864,14 +873,41 @@ export class LetterManager {
         return summaries;
     }
 
+    private summaryRecordKey(summary: LetterSummary): string {
+        return summary.id || `${summary.date}\u001f${summary.summary}`;
+    }
+
     public saveLetterSummaries(playerId: string, characterId: string, summaries: LetterSummary[], ctx?: LetterTimelineContext): void {
         const resolved = this.ctxFor(ctx);
         let targetPath: string;
         if (resolved?.identity) {
             this.kickoffCampaignMigration(resolved);
             targetPath = campaignLetterSummaryPath(this.userDataDir, resolved.identity, characterId);
+        } else {
+            targetPath = path.join(this.legacySummariesDirFor(playerId), `${characterId}.json`);
+        }
+
+        // R3: both write flows (reply-generation append and the user-managed
+        // save-all) hand in only the records visible in the current context.
+        // Merge against the records already on disk so the write replaces the
+        // visible subset and KEEPS records hidden on sibling branches — the
+        // caller cannot see them, so dropping them (the previous whole-file
+        // overwrite) made a rollback onto their branch lose them forever.
+        // Deletions of records the caller did see still take effect, because
+        // a visible record absent from the incoming set is simply not kept.
+        const diskRecords = this.loadSummaryFile(targetPath);
+        const diskKeys = new Set(diskRecords.map(s => this.summaryRecordKey(s)));
+
+        // Stamp only records that are genuinely new to this store. Records
+        // already on disk keep their own lineage stamps — re-stamping an
+        // existing record with the current node would silently move it onto
+        // the saving branch and hide it on every other branch.
+        if (resolved?.identity) {
             for (const summary of summaries) {
-                if (summary.votcCampaignId === undefined && resolved.identity) {
+                if (diskKeys.has(this.summaryRecordKey(summary))) {
+                    continue;
+                }
+                if (summary.votcCampaignId === undefined) {
                     summary.votcCampaignId = resolved.identity.campaignId;
                 }
                 if (summary.votcTimelineNodeId === undefined && resolved.currentNodeId) {
@@ -881,12 +917,18 @@ export class LetterManager {
                     summary.votcCheckpointEpoch = resolved.checkpointEpoch;
                 }
             }
-        } else {
-            targetPath = path.join(this.legacySummariesDirFor(playerId), `${characterId}.json`);
         }
+
+        const visibility = resolved ? this.visibilityFor(resolved, undefined) : undefined;
+        const incomingKeys = new Set(summaries.map(s => this.summaryRecordKey(s)));
+        const hiddenOnDisk = visibility
+            ? diskRecords.filter(s => !isLetterRecordVisible(s, visibility) && !incomingKeys.has(this.summaryRecordKey(s)))
+            : [];
+        const merged = [...summaries, ...hiddenOnDisk];
+
         try {
             fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-            fs.writeFileSync(targetPath, JSON.stringify(summaries, null, 2), 'utf8');
+            fs.writeFileSync(targetPath, JSON.stringify(merged, null, 2), 'utf8');
         } catch (error) {
             console.error(`Error saving letter summaries for player ${playerId}, character ${characterId}:`, error);
         }
@@ -971,14 +1013,18 @@ export class LetterManager {
         // payload: the timeline commit block persisted on the reply is spliced
         // in so the save receives the letter's node/epoch/token at delivery,
         // and the thread guard makes the letters_runner poll repeats inert.
-        // Letters outside the scheme keep the legacy unguarded payload.
+        // The payload also embeds the reply's own campaign identity (R2), so
+        // a stale letters.txt polled in another campaign fails the whole
+        // delivery block instead of consuming that campaign's slot. Letters
+        // outside the scheme keep the legacy unguarded payload.
         const slotMatch = letterId.match(/^letter_([1-9])$/);
         const gameCommand = slotMatch
             ? buildLetterDeliveryPayload({
                 letterNumber: slotMatch[1],
                 deliveryId: Number.isSafeInteger(letter.totalDays) && letter.totalDays >= 0 ? letter.totalDays : 0,
                 escapedReply,
-                timelineBlock: storedLetter.letter.timelineRunBlock
+                timelineBlock: storedLetter.letter.timelineRunBlock,
+                campaignIdParts: storedLetter.context?.identity?.campaignParts
             })
             : buildLegacyLetterDeliveryPayload(letterId, escapedReply);
 

@@ -35,7 +35,8 @@ import { buildSaveFactSettings } from "./saveFacts/saveFactSettings.js";
 import { buildSaveFactDiagnosticsDto, createEmptyConversationFactContext, type ConversationFactContext } from "./saveFacts/saveFactTypes.js";
 import { loadCampaignStoreWithMigration, observedStateFromContext } from "./campaignBusiness.js";
 import { LetterManager } from "./letter/LetterManager.js";
-import { resolveLetterTimelineContextFromGameData } from "./letter/letterTimelineContext.js";
+import { resolveLetterTimelineContextFromGameData, buildLetterContextFromRecord } from "./letter/letterTimelineContext.js";
+import { evaluateReplyDeliveryGate } from "./letter/letterDeliveryGate.js";
 import { BattleReportGenerator } from "./battleReport/BattleReportGenerator.js";
 import { parseLog } from "../shared/gameData/parseLog.js";
 import { parseLettersFromLog } from "./letter/parseLogForLetters.js";
@@ -337,7 +338,11 @@ function rehydratePendingReplyLetters(playerId: string): void {
         storedLetters.set(original.id, {
             letter: reply,
             originalLetter: original,
-            expectedDeliveryDay
+            expectedDeliveryDay,
+            // R2/R5: route delivery gating and the delivered-confirmation back
+            // to the campaign the reply itself belongs to (from its lineage
+            // stamps), never to whichever conversation is active now.
+            context: buildLetterContextFromRecord(reply, playerId)
         });
         rehydratedCount++;
         console.log(`rehydratePendingReplyLetters: Re-queued reply for letter ${original.id}, expectedDeliveryDay: ${expectedDeliveryDay}`);
@@ -372,6 +377,31 @@ async function checkAndDeliverLetters() {
                 continue;
             }
             const currentDateString = gameData.date;
+
+            // R2: the queue can hold replies recovered from other campaigns
+            // (startup rehydration) or produced by generation that finished
+            // after a campaign switch. Fail-closed: deliver only when the
+            // reply's own campaign and player match the game context we are
+            // about to write into; otherwise keep the record pending and do
+            // not consume the current campaign's slot.
+            let currentCampaignId: string | undefined;
+            try {
+                currentCampaignId = buildContextFromGameData(gameData).identity?.campaignId;
+            } catch (error) {
+                console.warn(`Letter delivery for ${letterId}: current game context has no usable timeline identity: ${error}`);
+            }
+            const verdict = evaluateReplyDeliveryGate(
+                {
+                    recipientId: String(storedLetter.letter.recipient.id),
+                    campaignId: storedLetter.letter.votcCampaignId
+                },
+                currentCampaignId ? { campaignId: currentCampaignId } : undefined,
+                String(gameData.playerID)
+            );
+            if (!verdict.deliverable) {
+                console.log(`Letter delivery for ${letterId} deferred (${verdict.reason}): reply campaign ${storedLetter.letter.votcCampaignId ?? 'unknown'}, player ${storedLetter.letter.recipient.id}; current campaign ${currentCampaignId ?? 'unknown'}, player ${gameData.playerID}. Keeping it pending.`);
+                continue;
+            }
 
             // The letter is being sent to the game, but not yet confirmed as delivered.
             letterManager.deliverLetter(storedLetter, config, currentDateString);
@@ -1287,12 +1317,17 @@ clipboardListener.on('VOTC:LETTER_ACCEPTED', async () => {
             const deliveryDateString = totalDaysToDateString(currentTotalDays);
             const deliveryDate = new Date(deliveryDateString.replace(/\./g, '-'));
 
-            // Now officially mark as delivered and save
+            // Now officially mark as delivered and save. R5: address the
+            // record through the context captured when the reply was queued
+            // (its own campaign namespace), not through the mutable
+            // current-conversation identity — at accept time no conversation
+            // may be open, or it may belong to another campaign.
             letterManager.markAsDelivered(
                 String(replyLetter.recipient.id), // Player ID
                 String(replyLetter.sender.id),   // Character ID
                 replyLetter.id,
-                deliveryDate
+                deliveryDate,
+                lastLetterSentToGame.context
             );
 
             lastLetterSentToGame = null; // Clear the tracked letter
@@ -1569,7 +1604,12 @@ clipboardListener.on('VOTC:LETTER', async () => {
         const storedLetter: StoredLetter = {
             letter: replyLetter,
             originalLetter: latestLetter,
-            expectedDeliveryDay: expectedDeliveryDay
+            expectedDeliveryDay: expectedDeliveryDay,
+            // R2/R5: capture the generation-time context so delivery gating
+            // and the delivered-confirmation stay bound to the campaign the
+            // reply was generated in, even if the player switches campaigns
+            // while this reply is pending.
+            context: letterTimelineContext
         };
 
         storedLetters.set(latestLetter.id, storedLetter);

@@ -397,8 +397,10 @@ describe('run builder uniqueness and guarded commit coverage', () => {
         expect(text).toContain("userDataDir: app.getPath('userData')");
         // The guarded commit block is built once from the transition result
         // and shared by the fallback payload and the persisted reply letter.
+        // The fallback writer call also passes the campaign id parts for the
+        // R2 whole-block campaign guard (fifth argument).
         expect(text).toContain('buildLetterTimelineBlock({');
-        expect(text).toContain('writeLetterReplyFallbackRunFile(this.config.userFolderPath, snapshot.slotId, snapshot.deliveryId, timelineRunBlock)');
+        expect(text).toContain('writeLetterReplyFallbackRunFile(this.config.userFolderPath, snapshot.slotId, snapshot.deliveryId, timelineRunBlock, snapshot.campaignIdParts)');
         expect(text).toContain('replyLetter.timelineRunBlock = timelineRunBlock');
         expect(text).not.toContain('set_variable = { name = votc_timeline_node_a');
     });
